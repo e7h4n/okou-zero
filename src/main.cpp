@@ -1,5 +1,6 @@
 #include "okou/dictation.hpp"
 #include "okou/ui.hpp"
+#include "update_process.hpp"
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -8,6 +9,7 @@
 #include <deque>
 #include <iostream>
 #include <thread>
+#include <unistd.h>
 
 namespace okou {
 namespace {
@@ -652,19 +654,64 @@ int main(int argc, char **argv) {
             ui.select_thread(shared_thread);
             check(ui.draft == "speech belongs to original");
             ui.reset_account();
+            check(ui.update_safe());
+            ui.select_thread(shared_thread);
+            ui.draft = "keep this draft across threads";
+            check(!ui.update_safe());
+            ui.select_thread(other_thread);
+            check(ui.draft.empty() && !ui.update_safe());
+            ui.reset_account();
+            check(ui.update_safe());
+            ui.voice_pending = true;
+            check(!ui.update_safe());
+            ui.reset_account();
             ui.demo("chat");
         }
         auto last = std::chrono::steady_clock::now();
         auto start = last;
-        bool dirty = true, running = true;
-        while (running && !interrupted) {
+        bool dirty = true, running = true, restart = false;
+        UpdateProcess updater;
+        if (!demo)
+            updater.start(false, OKOU_ZERO_VERSION);
+        while ((running && !interrupted) || updater.installing()) {
             auto now = std::chrono::steady_clock::now();
             lv_tick_inc(static_cast<std::uint32_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count()));
             last = now;
             if (engine && engine->drain(ui))
                 dirty = true;
-            for (const auto &input : keyboard ? keyboard->poll() : std::vector<Input>{}) {
+            if (updater.poll()) {
+                ui.update_message = update_hint(updater.view());
+                dirty = true;
+            }
+            if (updater.view().status == UpdateStatus::installed) {
+                restart = running && !interrupted;
+                break;
+            }
+            std::vector<Input> inputs;
+            try {
+                if (keyboard)
+                    inputs = keyboard->poll();
+            } catch (const std::exception &) {
+                if (!updater.installing())
+                    throw;
+                running = false; // Finish the confirmed install before leaving.
+            }
+            for (const auto &input : inputs) {
+                if (updater.installing())
+                    continue;
+                if (input.key == Key::update) {
+                    if (updater.view().status == UpdateStatus::ready) {
+                        if (!ui.update_safe())
+                            ui.update_message = "Finish draft/voice before updating";
+                        else {
+                            updater.start(true, OKOU_ZERO_VERSION);
+                            ui.update_message = update_hint(updater.view());
+                        }
+                        dirty = true;
+                    }
+                    continue;
+                }
                 if ((ui.recording || ui.voice_pending) && input.key == Key::escape) {
                     if (engine) {
                         ui.busy = true;
@@ -727,6 +774,16 @@ int main(int argc, char **argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         engine.reset();
+        if (restart && !interrupted) {
+            keyboard.reset();
+            std::vector<char *> arguments;
+            arguments.push_back(const_cast<char *>("okou-zero"));
+            for (int i = 1; i < argc; ++i)
+                arguments.push_back(argv[i]);
+            arguments.push_back(nullptr);
+            execv("/usr/bin/okou-zero", arguments.data());
+            throw std::runtime_error("Update installed; reopen Okou from the launcher");
+        }
         return 0;
     } catch (const std::exception &) {
         std::cerr

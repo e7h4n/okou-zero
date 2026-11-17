@@ -14,7 +14,10 @@ for raw in files:
     path = root / relative
     if not path.is_file():
         continue
-    if path.suffix in {".deb", ".pem", ".key", ".wav"} or "credentials.json" in relative:
+    public_key = relative == "assets/update-public.pem"
+    if public_key and not re.fullmatch(r"-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+/=\n]+-----END PUBLIC KEY-----\n", path.read_text()):
+        errors.append(f"{relative}: only a public update-verification key is allowed")
+    if (path.suffix in {".deb", ".pem", ".key", ".wav"} and not public_key) or "credentials.json" in relative:
         errors.append(f"{relative}: runtime artifact must not be tracked")
     if path.suffix not in {".cpp", ".hpp", ".h", ".md", ".yml", ".json", ".py", ".txt"}:
         continue

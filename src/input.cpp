@@ -1,4 +1,5 @@
 #include "okou/platform.hpp"
+#include "update_process.hpp"
 #include <cerrno>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -110,7 +111,8 @@ Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl) {
         }
     return out;
 }
-Keyboard::Keyboard(bool desktop, const std::string &path) : desktop_(desktop) {
+Keyboard::Keyboard(bool desktop, const std::string &path)
+    : desktop_(desktop), update_shortcut_(std::make_unique<UpdateShortcut>()) {
     if (!desktop_) {
         fd_ = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if (fd_ < 0)
@@ -149,6 +151,11 @@ std::vector<Input> Keyboard::poll() {
             Input out;
             out.shift = (mod & KMOD_SHIFT) != 0;
             out.ctrl = (mod & KMOD_CTRL) != 0;
+            if (event.key.keysym.sym == SDLK_u && out.ctrl && (mod & KMOD_ALT) &&
+                !event.key.repeat) {
+                result.push_back({Key::update, {}, false, true});
+                continue;
+            }
             switch (event.key.keysym.sym) {
             case SDLK_RETURN:
             case SDLK_KP_ENTER:
@@ -219,10 +226,15 @@ std::vector<Input> Keyboard::poll() {
             throw std::runtime_error("Keyboard disconnected");
         if (event.type == EV_SYN && event.code == SYN_DROPPED) {
             shift_ = ctrl_ = false;
+            *update_shortcut_ = UpdateShortcut{};
             continue;
         }
         if (event.type != EV_KEY)
             continue;
+        if (update_shortcut_->event(event.code, event.value)) {
+            result.push_back({Key::update, {}, false, true});
+            continue;
+        }
         if (event.code == KEY_LEFTSHIFT || event.code == KEY_RIGHTSHIFT) {
             shift_ = event.value != 0;
             continue;

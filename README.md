@@ -34,7 +34,8 @@ Ubuntu 24.04 (amd64 or arm64):
 
 ```sh
 sudo apt-get install cmake ninja-build g++ libcurl4-openssl-dev libssl-dev \
-  zlib1g-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk
+  zlib1g-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk \
+  python3 openssl sudo
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
@@ -45,8 +46,10 @@ Public CI uses no production accounts, secrets, conversations or microphone.
 Protocol fixtures run on loopback; UI tests use SDL's dummy video driver. Mock
 screenshots intentionally contain demo conversations, never a real account.
 
-Device packages are built by the `ARM64 package and installation` CI job and
-published as the `okou-zero-arm64-deb` artifact, with SHA-256 checksums. **Do not
+Device packages are built by the native ARM64 CI matrix leg and
+published as the `okou-zero-<version>-arm64` artifact, with SHA-256 checksums.
+Both native amd64 (SDL2 simulator) and arm64 (device backend) builds retain
+protocol, UI, mocked updater and installed-package smoke tests. **Do not
 compile on the Cardputer.** No repository automation merges PRs or deploys a device.
 
 ## Install a CI-built package
@@ -55,7 +58,7 @@ On the device, after downloading and verifying the CI artifact:
 
 ```sh
 sha256sum -c SHA256SUMS
-sudo apt-get install ./okou-zero_0.2.0_arm64.deb
+sudo apt-get install ./okou-zero_0.2.1_arm64.deb
 ```
 
 The package adds an `Okou` entry in `/usr/share/APPLaunch/applications`. Start it
@@ -68,6 +71,31 @@ Configure the public OAuth client as described in [auth setup](docs/auth-setup.m
 The app prompts for a missing public client ID; optional settings are documented
 in [the example](config/config.example.json). Store local configuration in a 0700
 directory with the file mode 0600. No client secret belongs in this file.
+
+## Signed updates
+
+Use only the [official GitHub Releases](https://github.com/e7h4n/okou-zero/releases).
+Version **0.2.1** is the next native V1 signed-update baseline; obsolete Hello World
+release `v0.1.4` was deliberately cancelled and must not be published or installed.
+The app checks for a stable update at launch without installing it automatically.
+Press **Ctrl+Alt+U** to explicitly confirm an offered update. The unprivileged
+updater verifies the signed manifest, version, arm64 package metadata, digest and
+size; the narrowly scoped root helper re-verifies before installation. Failure
+leaves the current app in place. See [update security and recovery](docs/updates.md).
+
+The package installs updater modules in `/usr/lib/okou-zero`, the public key in
+`/usr/share/okou-zero`, and an isolated-Python helper at
+`/usr/libexec/okou-zero-update-install`. Its root-owned `0440` sudoers rule permits
+only that helper with **no arguments** for the sudo group, not arbitrary commands.
+Runtime dependencies include Python 3, OpenSSL and sudo alongside native V1 dependencies.
+
+Trusted repository tag-push CI publishes only after **both** native architecture
+builds, tests and package-install/render/removal checks pass. Release metadata must
+match the configured CMake version and package. The release-only
+`OKOU_UPDATE_SIGNING_KEY` secret signs `manifest.json`; CI verifies the signature
+against the bundled public key before creating the release, which also contains
+`manifest.sig`, the arm64 `.deb` and `SHA256SUMS`. Existing releases are never
+replaced. Public CI tests mock updater network calls and never install a real update.
 
 ## Keyboard
 
@@ -83,6 +111,7 @@ directory with the file mode 0600. No client secret belongs in this file.
 | Esc | Back/menu |
 | Ctrl+W | Workspace/sign-out menu |
 | Ctrl+L | Refresh authoritative state |
+| Ctrl+Alt+U | Explicitly confirm an offered signed update |
 | Ctrl+Q | Exit to launcher |
 
 Workspace switching signs out and starts a new device grant; select the new

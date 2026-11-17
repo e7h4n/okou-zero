@@ -25,6 +25,7 @@ class UI {
     std::string draft, status = "Sign in to continue", user_id, org_id;
     std::string user_code, verification_uri;
     std::string project_filter;
+    std::string update_message;
     bool busy = false, recording = false, live = false, uncertain = false;
     bool submitting = false, voice_pending = false, voice_working = false;
     int selected = 0;
@@ -32,6 +33,7 @@ class UI {
     ~UI();
     Action handle(const Input &input);
     void render();
+    bool update_safe() const;
     void demo(const std::string &screen);
     void select_thread(const Thread &thread);
     void reset_account();

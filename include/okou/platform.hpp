@@ -24,6 +24,7 @@ enum class Key {
     workspace,
     reload,
     logout,
+    update,
     quit
 };
 struct Input {
@@ -46,6 +47,7 @@ class Display {
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+class UpdateShortcut;
 class Keyboard {
   public:
     Keyboard(bool desktop, const std::string &path);
@@ -55,5 +57,6 @@ class Keyboard {
   private:
     bool desktop_, shift_ = false, ctrl_ = false, caps_ = false;
     int fd_ = -1;
+    std::unique_ptr<UpdateShortcut> update_shortcut_;
 };
 } // namespace okou

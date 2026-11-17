@@ -1,5 +1,6 @@
 /build*/
 /generated/
+__pycache__/
 *.deb
 *.bmp
 *.wav

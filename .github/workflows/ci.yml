@@ -10,73 +10,123 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
-  desktop:
-    name: Desktop protocols and UI
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+  native:
+    name: Native ${{ matrix.arch }} protocols, UI and package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            desktop: 'ON'
+            build_type: Debug
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            desktop: 'OFF'
+            build_type: Release
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk clang-format
+          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk clang-format dpkg-dev python3 openssl sudo
       - name: Check repository hygiene
+        if: matrix.arch == 'amd64'
         run: |
           git diff --check
           python3 scripts/check_repository.py
           clang-format --dry-run --Werror include/okou/*.hpp src/*.cpp tests/*.cpp
-      - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
+      - name: Configure native build
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DOKOU_ZERO_DESKTOP=${{ matrix.desktop }}
+      - name: Read configured CMake version
+        id: version
+        shell: bash
+        run: |
+          version=$(awk -F= '$1 == "CMAKE_PROJECT_VERSION:STATIC" {print $2}' build/CMakeCache.txt)
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Build
         run: cmake --build build --parallel 2
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      # Updater tests mock all release/network operations. Never check/apply a real update in CI.
+      - name: Native protocol, UI and updater tests
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+      - name: Build and inspect Debian package
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        working-directory: build
+        shell: bash
+        run: |
+          cpack -G DEB
+          shopt -s nullglob
+          packages=(okou-zero_*.deb)
+          test "${#packages[@]}" -eq 1
+          test "$(dpkg-deb -f "${packages[0]}" Architecture)" = "$EXPECTED_ARCH"
+          dpkg-deb --info "${packages[0]}"
+          dpkg-deb --contents "${packages[0]}"
+          sha256sum "${packages[0]}" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Installation, packaged native UI and removal smoke test
+        run: bash scripts/ci-package-smoke.sh ./build/okou-zero_*.deb build
       - name: Save test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: desktop-test-evidence
+          name: native-${{ matrix.arch }}-test-evidence
           path: |
             build/ui-*.bmp
+            build/ui-*.ppm
             build/Testing/Temporary/LastTest.log
           retention-days: 14
-  arm64:
-    name: ARM64 package and installation
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev nlohmann-json3-dev libasound2-dev libfreetype-dev fonts-noto-cjk dpkg-dev
-      - name: Configure native ARM64 build
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DOKOU_ZERO_DESKTOP=OFF
-      - name: Build
-        run: cmake --build build --parallel 2
-      - name: Protocol tests on ARM64
-        run: ctest --test-dir build --output-on-failure
-      - name: Build and inspect Debian package
-        working-directory: build
-        run: |
-          cpack -G DEB
-          test "$(dpkg-deb -f okou-zero_*_arm64.deb Architecture)" = arm64
-          dpkg-deb --info okou-zero_*_arm64.deb
-          dpkg-deb --contents okou-zero_*_arm64.deb
-          sha256sum okou-zero_*_arm64.deb > SHA256SUMS
-      - name: Installation, packaged UI and removal smoke test
-        run: bash scripts/ci-package-smoke.sh ./build/okou-zero_*_arm64.deb build
       - name: Publish package artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: okou-zero-arm64-deb
+          name: okou-zero-${{ steps.version.outputs.version }}-${{ matrix.arch }}
           path: |
-            build/okou-zero_*_arm64.deb
+            build/okou-zero_*.deb
             build/SHA256SUMS
             build/installed-headless.ppm
+            build/installed-update.ppm
           if-no-files-found: error
           retention-days: 30
+  release:
+    name: Publish signed stable arm64 update
+    if: github.event_name == 'push' && github.repository == 'e7h4n/okou-zero' && startsWith(github.ref, 'refs/tags/v')
+    # The entire dual-native matrix must pass, including installation and UI smoke tests.
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out trusted tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download this run's tested arm64 package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: okou-zero-${{ needs.native.outputs.version }}-arm64
+          path: release-input
+      - name: Install signing dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3 openssl dpkg-dev
+      - name: Validate, sign, verify and publish stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OKOU_UPDATE_SIGNING_KEY: ${{ secrets.OKOU_UPDATE_SIGNING_KEY }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          packages=(release-input/*.deb)
+          test "${#packages[@]}" -eq 1
+          python3 scripts/release.py --tag "$RELEASE_TAG" --package "${packages[0]}" --output-dir release-assets

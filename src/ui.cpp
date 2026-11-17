@@ -254,6 +254,12 @@ Action UI::handle(const Input &input) {
     }
     return Action::none;
 }
+bool UI::update_safe() const {
+    return !busy && !recording && !voice_pending && !voice_working && !submitting && !uncertain &&
+           draft.empty() && pending_texts_.empty() &&
+           std::none_of(drafts_.begin(), drafts_.end(),
+                        [](const auto &entry) { return !entry.second.empty(); });
+}
 void UI::render() {
     lv_obj_clean(header_);
     lv_obj_clean(body_);
@@ -389,6 +395,8 @@ void UI::render() {
                : busy                   ? status
                                         : "Enter send   Ctrl+R voice   Esc back";
     }
+    if (!update_message.empty())
+        help = update_message;
     auto *footer_text = label(footer_, help, 5, 3, 310, muted, 15);
     lv_obj_set_style_text_font(footer_text, &lv_font_montserrat_12, 0);
 }
@@ -419,6 +427,8 @@ void UI::demo(const std::string &screen) {
         draft = "Let's start with the prototype";
     } else
         page = Page::threads;
+    if (screen == "update")
+        update_message = "v0.2.2 Ctrl+Alt+U update";
     selected = 0;
 }
 } // namespace okou
