@@ -29,4 +29,4 @@ These are proposals, not a claim that the features are implemented. See [the com
 - [Cardputer Zero launcher and hardware SDK](https://github.com/CardputerZero/launcher)
 - [Clerk Device Authorization Grant](https://clerk.com/docs/guides/configure/auth-strategies/oauth/device-authorization-grant)
 
-Licensing is pending an explicit decision. No upstream application implementation has been copied into this repository.
+Licensed under [MIT](LICENSE). This is an independent implementation; no BSL-licensed upstream application implementation has been copied into this repository.

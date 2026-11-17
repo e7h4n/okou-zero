@@ -6,7 +6,7 @@ Status: **proposed, awaiting owner decisions**. Reviewed 2026-11-17 against Okou
 
 The iOS client is the behavioral reference for chat synchronization, indicators, conversation state and voice input. It uses organization-scoped Clerk **session tokens**. The requested device login uses Clerk **OAuth access tokens**, which are not interchangeable with session tokens or Okou CLI tokens.
 
-The main Okou repository is BSL-1.1. Public visibility does not grant permission to copy its implementation under an unrelated license. Decide licensing before application source is introduced here.
+The main Okou repository is BSL-1.1. Public visibility does not grant permission to copy its implementation under an unrelated license. The owner approved MIT for this independent implementation; do not copy BSL application code into this repository.
 
 ## Authentication compatibility: source-level evidence
 
@@ -77,11 +77,16 @@ Public pull requests run without repository secrets or access to real Okou accou
 
 Mock integration tests do not replace one real Clerk login, one real Ably subscription or a physical microphone acceptance test. Real message submission and paid voice calls require a deliberate acceptance procedure, not public CI.
 
-## Decisions required before implementation
+## Confirmed owner decisions
 
-1. May this project include a companion PR in `okou-ai/okou` to add narrowly scoped OAuth admission to the necessary API operations? How should its review/release be handed off? No automatic merge is authorized.
-2. Does “voice communication” mean recording -> transcription -> editable draft -> explicit send for V1, or is spoken output/live voice also required?
-3. What license should the new repository use? A standalone MIT implementation without copied BSL code is one option; retaining BSL when reusing upstream implementation is another.
-4. Workspace UX and unsupported action-card UX need explicit agreement before implementing those branches. Recommended V1: bind one explicit workspace per grant, allow reauthorization to switch, and open unsupported approval flows in the web client.
+- Voice V1: recording -> transcription -> editable draft -> explicit send. No spoken output or live voice.
+- MIT license, independent implementation without copied BSL application code.
+- Workspace switching, Project/thread lists, active/unread indicators, history and text/voice input. Complex approval cards direct the user to the web client.
+
+## Remaining dependency decision
+
+The owner asked whether the existing MCP server removes the need for a main-repository change. Rechecked current main at `96b2fc71b22699ef6cd56c3229a762aa2887e19b`: MCP already supports organization-scoped OAuth for chat tools, including thread lists/history, indicators, sending and cancellation. It does not expose Project-list, Ably-token or voice-transcription tools. The corresponding direct HTTP routes still do not admit this OAuth flow; transcription and polishing explicitly accept session auth only. Thus authentication need not be reinvented, but the full requested feature set still has narrowly scoped backend dependencies. This is source-level evidence, not a live production test.
+
+A chat-only MCP implementation would avoid these additions but would not satisfy the agreed Project + Ably + voice requirements. A companion API PR remains proposed, not yet authorized; no automatic merge is authorized.
 
 No client application code, GitHub Actions workflow, backend patch or device deployment has been implemented at this stage.
