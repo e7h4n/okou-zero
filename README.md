@@ -8,9 +8,9 @@ A native, keyboard-first Okou client for the M5Stack Cardputer Zero.
 
 ## Try it on Cardputer Zero
 
-1. Open [GitHub Actions](https://github.com/e7h4n/okou-zero/actions), choose a successful CI run and download **okou-zero-0.1.2-arm64** (GitHub sign-in may be required). Artifacts are retained for 14 days, not permanent releases.
+1. Open [GitHub Actions](https://github.com/e7h4n/okou-zero/actions), choose a successful CI run and download **okou-zero-0.1.3-arm64** (GitHub sign-in may be required). Artifacts are retained for 14 days, not permanent releases.
 2. Extract the artifact, then verify it: `sha256sum --check SHA256SUMS`.
-3. Copy the `.deb` to the device and install: `sudo apt install ./okou-zero_0.1.2_arm64.deb`.
+3. Copy the `.deb` to the device and install: `sudo apt install ./okou-zero_0.1.3_arm64.deb`.
 4. Reload the launcher (`systemctl --user restart APPLaunch.service` while no other app is active), select **Okou**, press Enter.
 5. **Enter** increments the greeting counter; **Esc** exits back to the launcher.
 

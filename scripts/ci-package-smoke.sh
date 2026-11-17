@@ -13,7 +13,7 @@ mkdir -p -- "$output_dir"
 output_dir=$(realpath -- "$output_dir")
 
 [[ $(dpkg-deb --field "$package" Package) == okou-zero ]]
-[[ $(dpkg-deb --field "$package" Version) == 0.1.2 ]]
+[[ $(dpkg-deb --field "$package" Version) == 0.1.3 ]]
 expected_arch=$(dpkg --print-architecture)
 case "$(uname -m):$expected_arch" in
   x86_64:amd64|aarch64:arm64) ;;
@@ -65,7 +65,7 @@ installation_attempted=true
 sudo apt-get install -y "$package"
 test -x /usr/bin/okou-zero
 test -f /usr/share/applications/okou-zero.desktop
-/usr/bin/okou-zero --version | grep -Fx 'Okou 0.1.2'
+/usr/bin/okou-zero --version | grep -Fx 'Okou 0.1.3'
 timeout 30s /usr/bin/okou-zero --headless --output "$output_dir/installed-headless.ppm"
 timeout 30s /usr/bin/okou-zero --headless --output "$output_dir/installed-headless-keys.ppm" --keys enter,enter,esc
 

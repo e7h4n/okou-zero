@@ -36,5 +36,26 @@ int main() {
     check(!okou::compatible_framebuffer(v, f));
     f.smem_len = 108800; f.line_length = 639;
     check(!okou::compatible_framebuffer(v, f));
-    std::cout << "State and framebuffer metadata tests passed\n";
+    // fbdev allocates its RGB565 screen buffer with lv_malloc, unlike the
+    // headless RGB888 renderer's std::vector. Cover that exact allocation path.
+    lv_init();
+    auto *display = lv_display_create(320, 170);
+    lv_display_set_color_format(display, LV_COLOR_FORMAT_RGB565);
+    auto *pixels = lv_malloc(320 * 170 * 2);
+    check(pixels != nullptr);
+    lv_display_set_buffers(display, pixels, nullptr, 320 * 170 * 2, LV_DISPLAY_RENDER_MODE_DIRECT);
+    bool flushed = false;
+    lv_display_set_user_data(display, &flushed);
+    lv_display_set_flush_cb(display, [](lv_display_t *d, const lv_area_t *, uint8_t *) {
+        *static_cast<bool *>(lv_display_get_user_data(d)) = true;
+        lv_display_flush_ready(d);
+    });
+    okou::Ui ui;
+    ui.render(okou::State{});
+    lv_refr_now(display);
+    check(flushed);
+    lv_display_delete(display);
+    lv_free(pixels);
+    lv_deinit();
+    std::cout << "State, framebuffer metadata and device-buffer render tests passed\n";
 }
