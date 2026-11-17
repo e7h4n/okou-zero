@@ -92,7 +92,7 @@ void headless(const Options &o) {
     std::cout << "greetings=" << state.greetings << " running=" << state.running << '\n';
     lv_display_delete(display);
 }
-void device(const Options &o) {
+bool device(const Options &o) {
     File fb(o.framebuffer.c_str(), O_RDWR);
     fb_var_screeninfo info{};
     fb_fix_screeninfo fixed{};
@@ -109,24 +109,39 @@ void device(const Options &o) {
     ui.render(state);
     lv_refr_now(display);
     std::cout << "Okou " << OKOU_VERSION << " ready (320x170)" << std::endl;
-    auto previous = std::chrono::steady_clock::now();
-    while (state.running && !stopped) {
+    okou::UpdateShortcut shortcut;
+    okou::UpdateProcess updater;
+    updater.start(false, OKOU_VERSION);
+    ui.update(updater.view());
+    while ((state.running && !stopped) || updater.installing()) {
         input_event event{};
         ssize_t count;
         while ((count = read(keyboard.get(), &event, sizeof(event))) == sizeof(event)) {
-            if (event.type != EV_KEY || event.value != 1) continue;
+            if (event.type != EV_KEY) continue;
+            if (shortcut.event(event.code, event.value) && updater.view().status == okou::UpdateStatus::ready) {
+                updater.start(true, OKOU_VERSION);
+                ui.update(updater.view());
+            }
+            if (event.value != 1 || updater.installing()) continue;
             state.apply(event.code == KEY_ENTER ? okou::Key::enter : event.code == KEY_ESC ? okou::Key::escape : okou::Key::other);
             ui.render(state);
         }
-        if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) throw std::runtime_error("Keyboard read failed");
-        const auto now = std::chrono::steady_clock::now();
-        lv_tick_inc(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - previous).count()));
-        previous = now;
+        if (count < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            if (!updater.installing()) throw std::runtime_error("Keyboard read failed");
+            state.running = false; // Defer exit until the confirmed install finishes.
+        }
+        if (updater.poll()) ui.update(updater.view());
+        if (updater.view().status == okou::UpdateStatus::installed) {
+            lv_display_delete(display);
+            return state.running && !stopped;
+        }
+        // fbdev owns LVGL's monotonic clock callback; do not also tick it here.
         lv_timer_handler();
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     lv_display_delete(display);
     std::cout << "Okou exited cleanly; greetings=" << state.greetings << std::endl;
+    return false;
 }
 } // namespace
 int main(int argc, char **argv) {
@@ -136,8 +151,13 @@ int main(int argc, char **argv) {
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
         lv_init();
-        if (options.headless) headless(options); else device(options);
+        bool restart = false;
+        if (options.headless) headless(options); else restart = device(options);
         lv_deinit();
+        if (restart) {
+            execl("/usr/bin/okou-zero", "okou-zero", "--framebuffer", options.framebuffer.c_str(), "--input", options.input.c_str(), static_cast<char *>(nullptr));
+            throw std::runtime_error("Update installed; reopen Okou from the launcher");
+        }
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "okou-zero: " << error.what() << '\n';

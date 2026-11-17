@@ -1,9 +1,24 @@
 #include "ui.hpp"
 #include "framebuffer.hpp"
 #include <iostream>
+#include <linux/input.h>
 #include <stdexcept>
 void check(bool value) { if (!value) throw std::runtime_error("State check failed"); }
 int main() {
+    okou::UpdateShortcut chord;
+    check(!chord.event(KEY_U, 1));
+    check(!chord.event(KEY_LEFTCTRL, 1));
+    check(!chord.event(KEY_U, 1));
+    check(!chord.event(KEY_RIGHTALT, 1));
+    check(chord.event(KEY_U, 1));
+    check(!chord.event(KEY_U, 2)); // Key-repeat must never reinstall.
+    check(!chord.event(KEY_U, 0));
+    check(!chord.event(KEY_LEFTCTRL, 0));
+    check(!chord.event(KEY_U, 1));
+    check(!chord.event(KEY_RIGHTCTRL, 1));
+    check(chord.event(KEY_U, 1));
+    check(!chord.event(KEY_RIGHTALT, 0));
+    check(!chord.event(KEY_U, 1));
     okou::State state;
     check(state.running && state.greetings == 0);
     state.apply(okou::Key::other);

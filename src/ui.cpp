@@ -25,6 +25,7 @@ Ui::Ui() {
     label("Hello, world!", 16, 40, &lv_font_montserrat_28, 0x202820);
     message_ = label("Ready on your Cardputer.", 16, 83, &lv_font_montserrat_14, 0x202820);
     counter_ = label("Offline demo / no account needed", 16, 106, &lv_font_montserrat_12, 0x5D6658);
+    update_ = label("", 16, 124, &lv_font_montserrat_12, 0x5D6658);
     label("ENTER  Say hello     ESC  Back", 16, 145, &lv_font_montserrat_12, 0x202820);
 }
 void Ui::render(const State &state) {
@@ -34,5 +35,19 @@ void Ui::render(const State &state) {
         lv_label_set_text(counter_, text.c_str());
     }
     lv_obj_invalidate(lv_screen_active());
+}
+void Ui::update(const UpdateView &view) {
+    std::string text;
+    switch (view.status) {
+    case UpdateStatus::checking: text = "Checking for updates..."; break;
+    case UpdateStatus::downloading: text = "Downloading update..."; break;
+    case UpdateStatus::ready: text = "v" + view.version + " ready: Ctrl+Alt+U"; break;
+    case UpdateStatus::installing: text = "Updating... Do not power off"; break;
+    case UpdateStatus::current: text = "Up to date"; break;
+    case UpdateStatus::failed: text = "Update unavailable / try next launch"; break;
+    case UpdateStatus::installed: text = "Updated. Restarting..."; break;
+    case UpdateStatus::idle: break;
+    }
+    lv_label_set_text(update_, text.c_str());
 }
 } // namespace okou

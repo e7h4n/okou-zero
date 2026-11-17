@@ -13,7 +13,11 @@ mkdir -p -- "$output_dir"
 output_dir=$(realpath -- "$output_dir")
 
 [[ $(dpkg-deb --field "$package" Package) == okou-zero ]]
-[[ $(dpkg-deb --field "$package" Version) == 0.1.3 ]]
+version=$(dpkg-deb --field "$package" Version)
+[[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+  echo "Package version is not stable SemVer" >&2
+  exit 1
+}
 expected_arch=$(dpkg --print-architecture)
 case "$(uname -m):$expected_arch" in
   x86_64:amd64|aarch64:arm64) ;;
@@ -24,6 +28,12 @@ actual_arch=$(dpkg-deb --field "$package" Architecture)
   echo "Package architecture $actual_arch does not match runner $expected_arch" >&2
   exit 1
 }
+
+[[ $(basename -- "$package") == "okou-zero_${version}_${actual_arch}.deb" ]]
+dependencies=$(dpkg-deb --field "$package" Depends)
+for dependency in python3 openssl sudo; do
+  grep -Eq "(^|,)[[:space:]]*${dependency}([[:space:]]*\\([^)]*\\))?[[:space:]]*(,|$)" <<< "$dependencies"
+done
 
 # Never remove an existing installation belonging to the caller.
 if dpkg-query -W -f='${Status}' okou-zero 2>/dev/null | grep -q 'install ok installed'; then
@@ -54,6 +64,27 @@ grep -qx 'Type=Application' "$desktop"
 grep -Eq '^Name=.+' "$desktop"
 grep -Eq '^Exec=(/usr/bin/)?okou-zero([[:space:]].*)?$' "$desktop"
 test -x "$staging/usr/bin/okou-zero"
+"$staging/usr/bin/okou-zero" --version | grep -Fx "Okou $version"
+
+verify_updater_files() {
+  local root=$1
+  local helper="$root/usr/libexec/okou-zero-update-install"
+  local key="$root/usr/share/okou-zero/update-public.pem"
+  local sudoers="$root/etc/sudoers.d/okou-zero-update"
+  test -f "$root/usr/lib/okou-zero/updater.py"
+  test -x "$helper"
+  # Isolated Python must ignore caller PYTHONPATH and user-site packages.
+  IFS= read -r shebang < "$helper"
+  [[ "$shebang" == '#!/usr/bin/python3 -I' ]]
+  test -f "$key"
+  cmp "$key" assets/update-public.pem
+  openssl pkey -pubin -in "$key" -noout
+  test -f "$sudoers"
+  sudo cmp "$sudoers" packaging/okou-zero-update.sudoers
+  [[ $(sudo grep -Ev '^[[:space:]]*(#|$)' "$sudoers") == '%sudo ALL=(root) NOPASSWD: /usr/libexec/okou-zero-update-install ""' ]]
+  sudo visudo -cf "$sudoers"
+}
+verify_updater_files "$staging"
 grep -qx 'Name=Okou' "$desktop"
 launcher="$staging/usr/share/APPLaunch/applications/okou-zero.desktop"
 grep -qx 'Name=Okou' "$launcher"
@@ -65,7 +96,16 @@ installation_attempted=true
 sudo apt-get install -y "$package"
 test -x /usr/bin/okou-zero
 test -f /usr/share/applications/okou-zero.desktop
-/usr/bin/okou-zero --version | grep -Fx 'Okou 0.1.3'
+/usr/bin/okou-zero --version | grep -Fx "Okou $version"
+verify_updater_files ''
+[[ $(stat -c '%U:%G:%a' /etc/sudoers.d/okou-zero-update) == root:root:440 ]]
+for protected in /usr/libexec/okou-zero-update-install /usr/lib/okou-zero/updater.py /usr/share/okou-zero/update-public.pem; do
+  [[ $(stat -c '%U:%G' "$protected") == root:root ]]
+  mode=$(stat -c '%a' "$protected")
+  (( (8#$mode & 8#022) == 0 ))
+done
+# Do not call installed updater check/apply: only mocked CTest tests may check
+# update metadata in CI. Never feed the privileged helper an actual bundle.
 timeout 30s /usr/bin/okou-zero --headless --output "$output_dir/installed-headless.ppm"
 timeout 30s /usr/bin/okou-zero --headless --output "$output_dir/installed-headless-keys.ppm" --keys enter,enter,esc
 
