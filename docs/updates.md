@@ -43,7 +43,7 @@ The root helper takes an exclusive update lock, copies bounded stdin into a fres
 
 ## Deliberate limits and recovery
 
-- Initial bootstrap: install 0.2.1 or newer once through the existing manual/SSH process. Older apps do not contain an updater.
+- Initial bootstrap: install 0.2.2 or newer once through the existing manual/SSH process. Older apps do not contain an updater.
 - No forced upgrades, periodic background daemon, automatic OS reboot, rollout percentages, delta patches or unattended installations.
 - No automatic rollback of Debian maintainer-script side effects. Keep power connected. An interrupted/failed `dpkg` may require an administrator to inspect and repair package-manager state. No failure is represented as confirmed success, and no uncertain install is automatically replayed.
 - A failed relaunch returns to the launcher; reopen Okou manually. A failed check is retried only on a future app launch.

@@ -59,7 +59,7 @@ verify_updater_files() {
   sudo cmp "$sudoers" packaging/okou-zero-update.sudoers
   [[ $(sudo grep -Ev '^[[:space:]]*(#|$)' "$sudoers") == '%sudo ALL=(root) NOPASSWD: /usr/libexec/okou-zero-update-install ""' ]]
   sudo visudo -cf "$sudoers"
-  [[ $(stat -c '%a' "$sudoers") == 440 ]]
+  [[ $(sudo stat -c '%a' "$sudoers") == 440 ]]
 }
 verify_updater_files "$staging/package"
 installation_attempted=true
@@ -67,8 +67,8 @@ sudo apt-get install -y "$package"
 /usr/bin/okou-zero --version | grep -Fx "Okou $version"
 verify_updater_files ''
 for protected in /usr/libexec/okou-zero-update-install /usr/lib/okou-zero/updater.py /usr/lib/okou-zero/security.py /usr/share/okou-zero/update-public.pem /etc/sudoers.d/okou-zero-update; do
-  [[ $(stat -c '%U:%G' "$protected") == root:root ]]
-  mode=$(stat -c '%a' "$protected")
+  [[ $(sudo stat -c '%U:%G' "$protected") == root:root ]]
+  mode=$(sudo stat -c '%a' "$protected")
   (( (8#$mode & 8#022) == 0 ))
 done
 # Never invoke installed updater check/apply or feed the root helper a real bundle.

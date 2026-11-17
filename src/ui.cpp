@@ -428,7 +428,7 @@ void UI::demo(const std::string &screen) {
     } else
         page = Page::threads;
     if (screen == "update")
-        update_message = "v0.2.2 Ctrl+Alt+U update";
+        update_message = "v0.2.3 Ctrl+Alt+U update";
     selected = 0;
 }
 } // namespace okou
