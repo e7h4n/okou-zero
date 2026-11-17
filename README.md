@@ -1,8 +1,10 @@
-# Okou Zero
+# okou
 
 A native, keyboard-first Okou client for the **M5Stack Cardputer Zero**.
 C++17, LVGL, a 320×170 RGB565 framebuffer, and the device's physical keyboard.
-Independent implementation, [MIT licensed](LICENSE).
+Independent implementation, [MIT licensed](LICENSE). The app display name is `okou`;
+package/executable remain `okou-zero`. Official avatar assets are retained from the
+approved baseline and excluded from the code license; see [notices](THIRD_PARTY_NOTICES.md).
 
 ## Status
 
@@ -56,7 +58,7 @@ sha256sum -c SHA256SUMS
 sudo apt-get install ./okou-zero_0.2.0_arm64.deb
 ```
 
-The package adds an `Okou` entry in `/usr/share/APPLaunch/applications`. Start it
+The package adds an `okou` entry in `/usr/share/APPLaunch/applications`. Start it
 through the launcher so the launcher releases framebuffer/input ownership. Do
 not run a competing foreground GUI over SSH. The app runs as the normal launcher
 user, not root, with existing video/input/audio access. No systemd GUI autostart,

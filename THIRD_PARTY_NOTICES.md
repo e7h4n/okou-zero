@@ -2,7 +2,8 @@
 
 The application source is MIT-licensed. Dependencies retain their own licenses.
 No BSL application implementation is copied from the Okou reference repository.
-The launcher entry has no bundled logo or other upstream brand artwork.
+The official avatar is retained from the repository's approved branding baseline;
+its separate brand-asset terms below are not covered by the MIT code license.
 
 ## LVGL 9.5.0
 
@@ -77,6 +78,23 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Built-in Montserrat font
+
+LVGL's built-in Montserrat font is licensed under the SIL Open Font License 1.1.
+The complete upstream notice is installed as `/usr/share/doc/okou-zero/Montserrat-OFL.txt`.
+Source: LVGL `scripts/built_in_font/font_license/Montserrat/OFL.txt` at the pinned commit.
+
+## Okou avatar (brand asset, not MIT-licensed code)
+
+The existing approved source asset `assets/okou-avatar-source.png` is the official
+Okou ready-state avatar. Source: `ios/Widgets/Assets.xcassets/Avatar-ready.imageset/Avatar-ready@3x.png`
+in https://github.com/okou-ai/okou at commit `72ef73aec992722ecd4b4173a02113a3e4f48327`.
+Original SHA-256: `abe5cab23c7d4d7a5cbbc6a27643161fb3ef6b27cafab82f3b81f1cadf71062d`.
+The 100px launcher and 96px desktop icons are proportional resizes only, without
+redrawing, recoloring or cropping. This artwork is excluded from the repository's
+MIT code license; no general license or trademark rights to reuse Okou brand
+assets are granted. No BSL application implementation is copied.
 
 ## Dynamically linked system dependencies
 
