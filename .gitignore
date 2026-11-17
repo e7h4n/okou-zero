@@ -1,0 +1,9 @@
+/build*/
+/generated/
+*.deb
+*.bmp
+*.wav
+*.pem
+credentials.json
+tokens.json
+pending-sends.json

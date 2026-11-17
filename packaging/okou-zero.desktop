@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Okou
+Comment=Your personal AI assistant on Cardputer Zero
+Exec=/usr/bin/okou-zero
+Terminal=false
+Categories=Network;

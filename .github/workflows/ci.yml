@@ -1,0 +1,86 @@
+name: Build and test
+on:
+  push:
+    branches: [main, 'feat/**', 'fix/**']
+    tags: ['v*']
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    name: Desktop protocols and UI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk
+      - name: Check repository hygiene
+        run: |
+          git diff --check
+          python3 scripts/check_repository.py
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Save test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-test-evidence
+          path: |
+            build/ui-*.bmp
+            build/Testing/Temporary/LastTest.log
+          retention-days: 14
+  arm64:
+    name: ARM64 package and installation
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev nlohmann-json3-dev libasound2-dev libfreetype-dev fonts-noto-cjk dpkg-dev
+      - name: Configure native ARM64 build
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DOKOU_ZERO_DESKTOP=OFF
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Protocol tests on ARM64
+        run: ctest --test-dir build --output-on-failure
+      - name: Build and inspect Debian package
+        working-directory: build
+        run: |
+          cpack -G DEB
+          test "$(dpkg-deb -f okou-zero_*_arm64.deb Architecture)" = arm64
+          dpkg-deb --info okou-zero_*_arm64.deb
+          dpkg-deb --contents okou-zero_*_arm64.deb
+          sha256sum okou-zero_*_arm64.deb > SHA256SUMS
+      - name: Installation and removal smoke test
+        run: |
+          sudo apt-get install -y ./build/okou-zero_*_arm64.deb
+          /usr/bin/okou-zero --version
+          test -f /usr/share/APPLaunch/applications/okou-zero.desktop
+          test -f /usr/share/doc/okou-zero/LICENSE
+          sudo apt-get remove -y okou-zero
+          test ! -e /usr/bin/okou-zero
+      - name: Publish package artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: okou-zero-arm64-deb
+          path: |
+            build/okou-zero_*_arm64.deb
+            build/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
