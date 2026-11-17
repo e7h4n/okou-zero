@@ -21,7 +21,7 @@ Ui::Ui() {
     auto *screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, lv_color_hex(0xF8F5F3), 0);
     lv_obj_remove_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
-    label("okou", 16, 12, &lv_font_montserrat_14, 0x5D6658);
+    label("Okou", 16, 12, &lv_font_montserrat_14, 0x5D6658);
     label("Hello, world!", 16, 40, &lv_font_montserrat_28, 0x202820);
     message_ = label("Ready on your Cardputer.", 16, 83, &lv_font_montserrat_14, 0x202820);
     counter_ = label("Offline demo / no account needed", 16, 106, &lv_font_montserrat_12, 0x5D6658);

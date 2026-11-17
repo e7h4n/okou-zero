@@ -13,7 +13,7 @@ mkdir -p -- "$output_dir"
 output_dir=$(realpath -- "$output_dir")
 
 [[ $(dpkg-deb --field "$package" Package) == okou-zero ]]
-[[ $(dpkg-deb --field "$package" Version) == 0.1.1 ]]
+[[ $(dpkg-deb --field "$package" Version) == 0.1.2 ]]
 expected_arch=$(dpkg --print-architecture)
 case "$(uname -m):$expected_arch" in
   x86_64:amd64|aarch64:arm64) ;;
@@ -54,9 +54,9 @@ grep -qx 'Type=Application' "$desktop"
 grep -Eq '^Name=.+' "$desktop"
 grep -Eq '^Exec=(/usr/bin/)?okou-zero([[:space:]].*)?$' "$desktop"
 test -x "$staging/usr/bin/okou-zero"
-grep -qx 'Name=okou' "$desktop"
+grep -qx 'Name=Okou' "$desktop"
 launcher="$staging/usr/share/APPLaunch/applications/okou-zero.desktop"
-grep -qx 'Name=okou' "$launcher"
+grep -qx 'Name=Okou' "$launcher"
 grep -qx 'Icon=share/images/okou-zero.png' "$launcher"
 cmp "$staging/usr/share/APPLaunch/share/images/okou-zero.png" assets/okou-zero.png
 test -f "$staging/usr/share/icons/hicolor/96x96/apps/okou-zero.png"
@@ -65,7 +65,7 @@ installation_attempted=true
 sudo apt-get install -y "$package"
 test -x /usr/bin/okou-zero
 test -f /usr/share/applications/okou-zero.desktop
-/usr/bin/okou-zero --version | grep -Fx 'okou 0.1.1'
+/usr/bin/okou-zero --version | grep -Fx 'Okou 0.1.2'
 timeout 30s /usr/bin/okou-zero --headless --output "$output_dir/installed-headless.ppm"
 timeout 30s /usr/bin/okou-zero --headless --output "$output_dir/installed-headless-keys.ppm" --keys enter,enter,esc
 

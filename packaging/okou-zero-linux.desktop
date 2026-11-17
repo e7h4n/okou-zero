@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=okou
+Name=Okou
 Comment=Offline Hello World and keyboard check
 Exec=/usr/bin/okou-zero
 Icon=/usr/share/icons/hicolor/96x96/apps/okou-zero.png

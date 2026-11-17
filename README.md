@@ -1,4 +1,4 @@
-# okou
+# Okou
 
 A native, keyboard-first Okou client for the M5Stack Cardputer Zero.
 
@@ -8,10 +8,10 @@ A native, keyboard-first Okou client for the M5Stack Cardputer Zero.
 
 ## Try it on Cardputer Zero
 
-1. Open [GitHub Actions](https://github.com/e7h4n/okou-zero/actions), choose a successful CI run and download **okou-zero-0.1.1-arm64** (GitHub sign-in may be required). Artifacts are retained for 14 days, not permanent releases.
+1. Open [GitHub Actions](https://github.com/e7h4n/okou-zero/actions), choose a successful CI run and download **okou-zero-0.1.2-arm64** (GitHub sign-in may be required). Artifacts are retained for 14 days, not permanent releases.
 2. Extract the artifact, then verify it: `sha256sum --check SHA256SUMS`.
-3. Copy the `.deb` to the device and install: `sudo apt install ./okou-zero_0.1.1_arm64.deb`.
-4. Reload the launcher (`systemctl --user restart APPLaunch.service` while no other app is active), select **okou**, press Enter.
+3. Copy the `.deb` to the device and install: `sudo apt install ./okou-zero_0.1.2_arm64.deb`.
+4. Reload the launcher (`systemctl --user restart APPLaunch.service` while no other app is active), select **Okou**, press Enter.
 5. **Enter** increments the greeting counter; **Esc** exits back to the launcher.
 
 Targets the actual 320×170 RGB565 LCD (`/dev/fb0`) and the built-in evdev keyboard. Run as the normal device user with `video` and `input` group access, not root. Launch through the launcher so it hands off the framebuffer and input; do not start a second framebuffer app over another active app. No inbound port, daemon, firmware or network configuration is installed.
@@ -60,4 +60,4 @@ Project, Ably and voice authorization coverage remains a separate backend depend
 - [Cardputer Zero launcher and hardware SDK](https://github.com/CardputerZero/launcher)
 - [Clerk device authorization](https://clerk.com/docs/guides/configure/auth-strategies/oauth/device-authorization-grant)
 
-[MIT](LICENSE), independent implementation. No BSL upstream implementation is copied. See [third-party notices](THIRD_PARTY_NOTICES.md) for LVGL and font licenses. The icon uses the official Okou avatar at the owner's request; brand assets are excluded from the MIT code license. The app display name is `okou`; the package and executable remain `okou-zero` for upgrade compatibility.
+[MIT](LICENSE), independent implementation. No BSL upstream implementation is copied. See [third-party notices](THIRD_PARTY_NOTICES.md) for LVGL and font licenses. The icon uses the official Okou avatar at the owner's request; brand assets are excluded from the MIT code license. The app display name is `Okou`; the package and executable remain `okou-zero` for upgrade compatibility.

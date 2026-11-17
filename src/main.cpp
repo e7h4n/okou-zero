@@ -108,7 +108,7 @@ void device(const Options &o) {
     okou::Ui ui;
     ui.render(state);
     lv_refr_now(display);
-    std::cout << "okou " << OKOU_VERSION << " ready (320x170)" << std::endl;
+    std::cout << "Okou " << OKOU_VERSION << " ready (320x170)" << std::endl;
     auto previous = std::chrono::steady_clock::now();
     while (state.running && !stopped) {
         input_event event{};
@@ -126,13 +126,13 @@ void device(const Options &o) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     lv_display_delete(display);
-    std::cout << "okou exited cleanly; greetings=" << state.greetings << std::endl;
+    std::cout << "Okou exited cleanly; greetings=" << state.greetings << std::endl;
 }
 } // namespace
 int main(int argc, char **argv) {
     try {
         const auto options = parse(argc, argv);
-        if (options.version) { std::cout << "okou " << OKOU_VERSION << '\n'; return 0; }
+        if (options.version) { std::cout << "Okou " << OKOU_VERSION << '\n'; return 0; }
         std::signal(SIGINT, stop);
         std::signal(SIGTERM, stop);
         lv_init();
