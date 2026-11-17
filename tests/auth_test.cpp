@@ -163,6 +163,8 @@ okou::Config config(Fixture &f, const std::string &dir) {
     c.api_origin = f.base;
     c.oauth_issuer = f.base;
     c.oauth_client_id = "public-test";
+    c.oauth_resource =
+        "https://api.okou.ai/mcp"; // Fixed wire fixture, independent of build profile.
     c.data_dir = dir;
     return c;
 }

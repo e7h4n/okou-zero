@@ -4,7 +4,7 @@ Okou Zero is an independent MIT C++17 client. Its transport/authentication imple
 
 ## Operator setup required before login
 
-There is deliberately **no bundled OAuth client ID**. An Okou administrator must provision an OAuth application in the correct Clerk instance:
+Official CI packages bundle the public OAuth client ID from the GitHub `staging` Environment variable `OKOU_ZERO_OAUTH_CLIENT_ID`. This Environment is only the configuration source: there is one standard package, not separate staging/production variants. An Okou administrator must provision the application in the matching Clerk instance:
 
 1. Enable **Public** and **Device authorization grant** for that application (`public: true`, `device_authorization_grant_enabled: true` in Clerk's administrative API). Enable refresh-token support / `offline_access` for the grant. The native client uses token endpoint authentication `none`, sends only `client_id`, and does not store or send a client secret. Device grant uses neither PKCE nor a redirect URI.
 2. Enable Organizations and allow `user:org:read`. Clerk's device verification page displays an Organization selector when this scope is requested. The user selects the workspace in that browser; the resulting access token must contain its `org_id`.
@@ -20,6 +20,14 @@ Sources checked 2026-11-17:
 - [Clerk Device Authorization Grant](https://clerk.com/docs/guides/configure/auth-strategies/oauth/device-authorization-grant)
 - [How Clerk implements OAuth](https://clerk.com/docs/guides/configure/auth-strategies/oauth/how-clerk-implements-oauth)
 - Okou protocol references: `turbo/apps/api/src/lib/mcp-server-config.ts`, `signals/routes/mcp-server.ts`, `signals/external/clerk.ts`.
+
+## Bundled defaults
+
+The standard package currently targets the companion backend PR Preview at `https://pr-48263-api.vm6.ai`. The resource is this origin plus `/mcp`; issuer is discovered from its OAuth resource metadata. These defaults live in code, so no additional GitHub API/issuer/resource Variables are needed. Only `OKOU_ZERO_OAUTH_CLIENT_ID` is injected by CI as a CMake string. It is public, not a secret. Main/tag builds fail closed if that Variable is missing; local/fork offline builds may leave it empty and show the setup screen.
+
+Configure locally with `cmake -S . -B build -DOKOU_ZERO_OAUTH_CLIENT_ID=YOUR_PUBLIC_CLIENT_ID`. Runtime environment variables still override user configuration, which overrides bundled defaults. Existing user configuration is preserved, not silently rewritten. Existing grants remain bound to API/issuer/resource/client ID and require fresh authorization when those change. There is no special test storage directory, test UI label, or alternate updater channel; normal signed stable updates remain enabled.
+
+Preview is the current service target, **not** proof that authentication works end to end. Its access protection still requires approved native ingress access; the Clerk application must allow the requested Project/Voice scopes. No bypass credential is embedded. Keep this Preview deployed while clients target it. Moving to production later requires a deliberate default-origin change and fresh authorization; a normal client ID is not a way to bypass Preview protection.
 
 ## Configuration
 

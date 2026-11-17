@@ -1,5 +1,6 @@
 #pragma once
 
+#include "okou/build_config.hpp"
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -14,10 +15,10 @@
 namespace okou {
 using Json = nlohmann::json;
 struct Config {
-    std::string api_origin = "https://api.okou.ai";
+    std::string api_origin = build::api_origin;
     std::string oauth_issuer;
-    std::string oauth_client_id;
-    std::string oauth_resource = "https://api.okou.ai/mcp";
+    std::string oauth_client_id = build::oauth_client_id;
+    std::string oauth_resource = std::string(build::api_origin) + "/mcp";
     std::string scopes = "openid profile offline_access user:org:read okou:chat:read "
                          "okou:chat:send okou:project:read okou:voice:transcribe";
     std::string keyboard = "/dev/input/by-path/platform-3f804000.i2c-event";

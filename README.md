@@ -72,6 +72,13 @@ The app prompts for a missing public client ID; optional settings are documented
 in [the example](config/config.example.json). Store local configuration in a 0700
 directory with the file mode 0600. No client secret belongs in this file.
 
+The standard CI package bundles the public `OKOU_ZERO_OAUTH_CLIENT_ID` Variable
+from the repository's `staging` GitHub Environment. There is no separate test
+package: the current default backend is `https://pr-48263-api.vm6.ai`, its resource
+is `/mcp`, and issuer is discovered via metadata. Signed stable updates remain
+enabled. See [bundled defaults](docs/auth-setup.md#bundled-defaults) for Preview
+access prerequisites and configuration override behavior.
+
 ## Signed updates
 
 Use only the [official GitHub Releases](https://github.com/e7h4n/okou-zero/releases).

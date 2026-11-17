@@ -13,6 +13,8 @@ jobs:
   native:
     name: Native ${{ matrix.arch }} protocols, UI and package
     runs-on: ${{ matrix.runner }}
+    # Configuration source only; this is the single standard package, not a staging variant.
+    environment: staging
     timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -44,7 +46,21 @@ jobs:
           python3 scripts/check_repository.py
           clang-format --dry-run --Werror include/okou/*.hpp src/*.cpp tests/*.cpp
       - name: Configure native build
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DOKOU_ZERO_DESKTOP=${{ matrix.desktop }}
+        env:
+          PUBLIC_CLIENT_ID: ${{ vars.OKOU_ZERO_OAUTH_CLIENT_ID }}
+          BUILD_TYPE: ${{ matrix.build_type }}
+          BUILD_DESKTOP: ${{ matrix.desktop }}
+          TRUSTED_PUBLISH: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+        shell: bash
+        run: |
+          # Forks may run offline tests without a configured public client.
+          # Main/tag builds must never silently publish an unconfigured package.
+          if [[ "$TRUSTED_PUBLISH" == true && -z "$PUBLIC_CLIENT_ID" ]]; then
+            echo 'Missing public OKOU_ZERO_OAUTH_CLIENT_ID Variable' >&2
+            exit 1
+          fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID"
       - name: Read configured CMake version
         id: version
         shell: bash
