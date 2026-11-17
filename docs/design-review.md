@@ -89,4 +89,4 @@ The owner asked whether the existing MCP server removes the need for a main-repo
 
 A chat-only MCP implementation would avoid these additions but would not satisfy the agreed Project + Ably + voice requirements. A companion API PR remains proposed, not yet authorized; no automatic merge is authorized.
 
-No client application code, GitHub Actions workflow, backend patch or device deployment has been implemented at this stage.
+The review above describes the future V1, not the offline bootstrap milestone. Milestone 0 now implements a standalone C++17/LVGL Hello World, shared headless renderer/state tests, native amd64/arm64 CI and Debian packaging. It does not implement authentication, chat, realtime, voice or any backend patch. Device acceptance evidence is recorded separately in `docs/hello-world-acceptance.md` when verified.
