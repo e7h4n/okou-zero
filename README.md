@@ -4,6 +4,8 @@ A native, keyboard-first Okou client for the M5Stack Cardputer Zero.
 
 **Milestone 0: offline Hello World, C++17/LVGL, headless UI tests and CI-built Debian packages.** Login, chat, Projects, Ably and voice are not implemented yet. This milestone makes no network requests.
 
+[Acceptance record](docs/hello-world-acceptance.md): both CI architectures pass and the CI package is installed and visible in the device launcher. Physical App launch/input/return verification is still blocked by an SSH transport failure; it is not claimed complete.
+
 ## Try it on Cardputer Zero
 
 1. Open [GitHub Actions](https://github.com/e7h4n/okou-zero/actions), choose a successful CI run and download **okou-zero-0.1.0-arm64** (GitHub sign-in may be required). Artifacts are retained for 14 days, not permanent releases.
