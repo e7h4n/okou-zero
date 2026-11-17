@@ -1,6 +1,6 @@
 # V1 design and compatibility review
 
-Status: **proposed, awaiting owner decisions**. Reviewed 2026-11-17 against Okou commit `30ac1c7c85be3d065b9330d90b86c14c3c5d6b0a`.
+Status: **V1 scope approved; implementation under verification**. Reviewed 2026-11-17 against Okou commit `30ac1c7c85be3d065b9330d90b86c14c3c5d6b0a`.
 
 ## Reference boundaries
 
@@ -87,6 +87,6 @@ Mock integration tests do not replace one real Clerk login, one real Ably subscr
 
 The owner asked whether the existing MCP server removes the need for a main-repository change. Rechecked current main at `96b2fc71b22699ef6cd56c3229a762aa2887e19b`: MCP already supports organization-scoped OAuth for chat tools, including thread lists/history, indicators, sending and cancellation. It does not expose Project-list, Ably-token or voice-transcription tools. The corresponding direct HTTP routes still do not admit this OAuth flow; transcription and polishing explicitly accept session auth only. Thus authentication need not be reinvented, but the full requested feature set still has narrowly scoped backend dependencies. This is source-level evidence, not a live production test.
 
-A chat-only MCP implementation would avoid these additions but would not satisfy the agreed Project + Ably + voice requirements. A companion API PR remains proposed, not yet authorized; no automatic merge is authorized.
+A chat-only MCP implementation would avoid these additions but would not satisfy the agreed Project + Ably + voice requirements. The owner authorized the minimal companion API PR. It is implemented at https://github.com/okou-ai/okou/pull/48263; no automatic merge is authorized. Client source and CI are reviewed separately at https://github.com/e7h4n/okou-zero/pull/1.
 
-The review above describes the future V1, not the offline bootstrap milestone. Milestone 0 now implements a standalone C++17/LVGL Hello World, shared headless renderer/state tests, native amd64/arm64 CI and Debian packaging. It does not implement authentication, chat, realtime, voice or any backend patch. Device acceptance evidence is recorded separately in `docs/hello-world-acceptance.md` when verified.
+V1 native implementation and CI now exist as version 0.2.0. Local protocol/audio/dictation/keyboard/UI tests pass. Backend scopes still require review/deployment and public Clerk device-client configuration before live-account acceptance. The separate 0.1.0 Hello World milestone and its historical evidence remain recorded in `docs/hello-world-acceptance.md`; they are not evidence for live V1 features.

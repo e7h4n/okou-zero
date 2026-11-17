@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Okou
-Comment=Offline Hello World and keyboard check
+Comment=Your personal AI assistant on Cardputer Zero
 Exec=/usr/bin/okou-zero
 Icon=share/images/okou-zero.png
 Terminal=false
-Categories=Utility;
+Categories=Network;

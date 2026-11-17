@@ -1,0 +1,55 @@
+# Realtime and local audio
+
+Both implementations are independent MIT C++17 code. No Ably SDK implementation (including the BSL Rust library) was copied or linked. IXWebSocket 11.4.6 provides WebSocket/TLS transport; ALSA provides Linux capture.
+
+## Ably subscription protocol
+
+`Realtime(provider, user_id, org_id, notify)` is inert until `start()`. `provider()` must return the signed Ably **TokenRequest object**, not a token string or an application bearer token. IDs are restricted to alphanumeric, `_` and `-`, preventing channel-name injection.
+
+1. The worker forwards only the signed TokenRequest fields to `POST https://rest.ably.io/keys/{keyName}/requestToken`, over verified HTTPS through `Http`. Neither an Okou bearer token nor an API key is sent to Ably. Identity mismatches, malformed requests and expired token responses are rejected.
+2. It connects to `wss://realtime.ably.io/` with JSON protocol `v=1.2`, `clientId`, `heartbeats=true`, and Ably's initial `accessToken` parameter. The official WebSocket authentication protocol specifies this query parameter (RSA3c); a native Authorization header is **not assumed to be a substitute**. The URL exists only inside process/transport memory. Never log the URL, `getUrl()`, HTTP bodies/headers, IX error strings or traffic frames. TLS certificate/hostname verification remains enabled. Do not add request/traffic logging around this connection.
+3. On protocol `CONNECTED` (4), it sends exactly one subscribe-mode `ATTACH` (10, flags `1 << 18`) for `user-org:<signedUser>:<signedOrg>`. Native OAuth intentionally does **not** authorize the global `user:<user>` channel, which contains unrelated capabilities; it is never subscribed. Optional run-output capability does not cause a subscription here. Transport open alone is not healthy.
+4. Once that workspace channel's `ATTACHED` (11) arrives, `notify("connection:gap")` is delivered **before** `connected()` becomes true, then `notify("connection:connected")` announces health. `connection:disconnected` is emitted initially and once on transition to unavailable (including stop). The owner must coalesce authoritative list, indicators and selected-history reads on the gap notification. Notifications are invalidation hints, not durable messages. No raw Ably `data`, error text, token or resume key reaches the callback.
+5. `MESSAGE` (15) forwards only known notification names. Supported names: `threadListChanged`, `chatIndicatorsChanged`, `chatThreadReadCursorUpdated`, `runModelsChanged`, `userPreferenceChanged`, `computerUseHostsChanged`, `desktopShellAuthorizationChanged`, `sshAuthorizationChanged`, `ssh:changed`, `connectorPermissionUpdated`, `connector:changed`, plus `chatThreadMessageCreated:<UUID>` and `chatThreadDetailChanged:<UUID>`. Unknown names, malformed UUID suffixes and foreign channels are ignored. The owner should keep the documented distinctions: a list invalidation is not an indicator invalidation.
+6. `AUTH` (17) challenges and proactive token-expiry refresh obtain a fresh signed request and exchange it on the **same single worker**, then send `{"action":17,"auth":{"accessToken":"…"}}` over the existing TLS WebSocket. A following `CONNECTED` confirms renewal without reattaching. Refresh begins before expiry, with a maximum 30-second lead. A 15-second authorization deadline prevents a stalled AUTH.
+7. `DISCONNECTED`, transport error/close, unexpected `DETACHED`, attach timeout, idle timeout, parse/queue overflow or a transient failure makes health false and reconnects with exponential backoff: approximately 1, 2, 4, 8, 16 and 30 seconds, plus at most 25% jitter. Token errors 40140–40149 invalidate the cached token and renew. Non-token authorization/capability 4xx failures halt retries; correct the cause, then `stop()` and `start()`.
+8. The most recent private connection key is used as `resume` on reconnect and channel serials are supplied in subsequent `ATTACH` messages. Continuity is deliberately **not claimed**: every new workspace-channel attachment emits `connection:gap` followed by `connection:connected`, even when Ably marks channels resumed. An in-place `ATTACHED` without RESUMED also emits `connection:gap` (not a duplicate connected event). This favors safe durable recovery over minimizing reads. No cross-process recovery key is persisted.
+9. Incoming heartbeat traffic maintains activity. After ten idle seconds, a protocol `HEARTBEAT` (0) with an ID expects its matching response within ten seconds. The server's `maxIdleInterval` plus a ten-second allowance is also enforced. IX handles WebSocket-level ping/pong separately.
+
+This is a narrow subscriber, **not a full Ably SDK**: no publishing, presence, message replay, run-output stream, history API, fallback-host discovery, persistent connection recovery or queued application commands. Queue caps are 128 frames, 1 MiB/frame and 4 MiB total queued text. Oversize/overflow causes reconnect and durable catch-up, never silent state acceptance. IX must first allocate the received transport frame before the application can reject it; this cap is not a transport-level allocation limit.
+
+### Ownership and integration
+
+- `notify` runs on the realtime worker, never the IX socket callback. It must be short, nonblocking and normally enqueue work to the UI/state owner. Do not perform slow HTTP reads in it.
+- `stop()` wakes backoff/queue waits, cancels the token-exchange `Http`, joins the owner worker, then stops/joins IX. IX's handshake timeout is ten seconds. No callback can run after owner-thread `stop()` returns. Calling `stop()` from `notify` requests shutdown but does not self-join; the owner must subsequently join using `stop()`.
+- Never destroy the object or call `start()` from inside `notify`. Restart is `stop(); start();`. Call lifecycle methods on the owning thread; do not hold a lock needed by the provider/callback while stopping.
+- The token provider is user-supplied synchronous code with no cancellation parameter in the shared API. It **must have its own bounded timeout** and synchronize access to any shared `Client`/OAuth state. An arbitrary blocking provider cannot be safely preempted by this implementation. Network library/DNS and kernel calls also retain their underlying platform limits; do not claim a strict universal shutdown deadline.
+- The backend grants only `user-org:<signedUser>:<signedOrg>` subscribe (plus optional run-output capability). This exact workspace channel is the sole health prerequisite. The former two-channel requirement is superseded; never request global-user capability or bypass native OAuth with session credentials.
+
+## ALSA capture and WAV
+
+The hardware-proven device supplied by main is `plughw:CARD=ES8389Audio,DEV=0`. `AudioCapture(device)` does not open a device or start recording. Only explicit `start()` opens `SND_PCM_STREAM_CAPTURE` with `SND_PCM_NONBLOCK` and configures exactly 16,000 Hz, mono, signed 16-bit little-endian, interleaved samples. Unsupported configurations fail rather than silently resampling incorrectly.
+
+The capture worker reads 512-frame chunks and uses waits of at most 50 ms. Overruns prepare the device again; suspend/fatal errors discard the recording and are reported by `finish()`. There is no potentially unbounded ALSA suspend/resume retry loop. A stop flag is inspected each iteration. Normal finish/cancel joins after the bounded poll, then drops and closes the PCM handle; a driver/kernel stuck in its own call remains outside userspace's hard deadline control.
+
+- Hard duration/memory cap: 9,600,000 mono samples (10 minutes, 19.2 MB PCM). Capacity is reserved exactly to avoid vector growth beyond the cap. Capture stops automatically at the cap and retains samples until explicit `finish()` or `cancel()`. Device/kernel buffering is additional and requested around 4,096 frames.
+- `finish()` stops capture and returns PCM; it **does not upload, transcribe, polish or send**. Finishing before start returns an empty vector.
+- `cancel()` and the destructor stop capture and discard/release buffered PCM; repeated cancellation is safe. The class writes no audio files or caches. Discarding is logical deallocation, not a claim of cryptographic RAM erasure.
+- A new `start()` is rejected until the previous recording has been finished or cancelled, including a recording that naturally reached its cap.
+- The owning UI implements recording → transcription → editable draft. Segmentation/overlap and the separate explicit send action belong to that owner. No hot mic, automatic upload or automatic send is implemented here.
+- `wav(pcm)` writes a standard 44-byte PCM RIFF header, 16 kHz mono s16le data, correct byte rates/alignment and explicit little-endian bytes on every host architecture. RIFF's 32-bit data/file-size bounds are checked before allocation. WAV construction temporarily allocates an additional output buffer; do not confuse the recording cap with the entire process's memory budget.
+
+## Offline verification
+
+`realtime_test` exercises the exact pure reducer called by the transport using fake JSON protocol messages: exact production workspace-only channel set and single-channel attach barrier, global-user/foreign-workspace rejection, subscribe-only flags, initial/in-place/reconnect catch-up, resume serial/key handling, AUTH and token errors, terminal denial, unknown/malformed frames, event-name filtering, no secret/payload leakage, signed TokenRequest field forwarding and URL-injection/identity rejection. It also verifies inert construction/stopping, the initial disconnected callback, callback-requested stop without self-join, duplicate start suppression and backoff cancellation using an intentionally invalid provider (rejected before HTTP). These tests do not open a real WebSocket or validate a live Ably service.
+
+`audio_test` verifies synthetic WAV headers, sizes, positive/negative/extreme sample endianness and inert/idempotent lifecycle operations. It never calls `start()` and never opens a microphone. Tests use explicit checks, not `assert`, so Release/NDEBUG retains them.
+
+Not yet hardware/live verified: real native OAuth TokenRequest issuance and subscription capabilities; live Ably endpoint/renewal/resume across network faults; actual device rate negotiation, microphone quality, unplug/suspend behavior, and ten-minute capture on Cardputer Zero. These require explicit authorized credentials and hardware; synthetic tests are not evidence of those paths.
+
+## Protocol references
+
+- Ably published feature specification: https://github.com/ably/specification/blob/main/specifications/features.md (RSA3b/c, RTC8, RTN2/14/15/22/23, RTL3/4/12, TR2/3, AD2).
+- Ably wire actions: https://github.com/ably/specification/blob/main/specifications/protocol.md
+- Ably token authentication: https://ably.com/docs/auth/token/ably-tokens
+- IXWebSocket pinned source: https://github.com/machinezone/IXWebSocket/tree/v11.4.6

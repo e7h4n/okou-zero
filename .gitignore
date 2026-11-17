@@ -1,5 +1,9 @@
 /build*/
 /generated/
 *.deb
-*.ppm
-__pycache__/
+*.bmp
+*.wav
+*.pem
+credentials.json
+tokens.json
+pending-sends.json
