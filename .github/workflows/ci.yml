@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-package:
+    name: Native ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake dpkg-dev pkg-config python3
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j2
+
+      - name: Run unit and UI tests
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+      - name: Exercise binary contract
+        run: |
+          ./build/okou-zero --version | grep -F '0.1.0'
+          timeout 30s ./build/okou-zero --headless --output build/headless.ppm
+          timeout 30s ./build/okou-zero --headless --output build/headless-keys.ppm --keys enter,enter,esc
+
+      - name: Build Debian package
+        working-directory: build
+        run: cpack -G DEB
+
+      - name: Smoke-test installed Debian package
+        shell: bash
+        run: |
+          shopt -s nullglob
+          packages=(build/*.deb)
+          test "${#packages[@]}" -eq 1
+          bash scripts/ci-package-smoke.sh "${packages[0]}" build
+
+      - name: Generate and verify SHA-256 checksums
+        working-directory: build
+        run: |
+          sha256sum -- *.deb *.ppm > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Upload package, checksums, and renders
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: okou-zero-0.1.0-${{ matrix.arch }}
+          path: |
+            build/*.deb
+            build/SHA256SUMS
+            build/*.ppm
+          if-no-files-found: error
+          retention-days: 14

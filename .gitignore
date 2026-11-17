@@ -1,0 +1,5 @@
+/build*/
+/generated/
+*.deb
+*.ppm
+__pycache__/
