@@ -308,19 +308,32 @@ Tokens OAuth::parse_tokens(const Json &body, const Tokens &previous) const {
     }
 }
 Tokens OAuth::refresh(const Tokens &previous) {
+    auto cached = detail::read_private(token_path(config_));
+    if (cached.value("reauthorization_required", false) &&
+        cached.value("grant_binding", Json::object()) == grant_binding(config_))
+        throw HttpError(401, "Authorize device again before refreshing");
     discover();
     if (previous.refresh_token.empty())
-        throw auth_error("No refresh token; authorize device again");
-    return parse_tokens(checked(post(http_, str(metadata_, "token_endpoint", true),
-                                     {{"grant_type", "refresh_token"},
-                                      {"refresh_token", previous.refresh_token},
-                                      {"client_id", config_.oauth_client_id},
-                                      {"resource", config_.oauth_resource}})),
-                        previous);
+        throw HttpError(401, "No refresh token; authorize device again");
+    try {
+        return parse_tokens(checked(post(http_, str(metadata_, "token_endpoint", true),
+                                         {{"grant_type", "refresh_token"},
+                                          {"refresh_token", previous.refresh_token},
+                                          {"client_id", config_.oauth_client_id},
+                                          {"resource", config_.oauth_resource}})),
+                            previous);
+    } catch (...) {
+        // The provider may have rotated the token even when its response was lost.
+        // Persist a token-free barrier so reconnects and process restarts cannot
+        // automatically reuse an uncertain refresh generation. Fresh login replaces it.
+        detail::write_private(token_path(config_), {{"grant_binding", grant_binding(config_)},
+                                                    {"reauthorization_required", true}});
+        throw HttpError(401, "Refresh failed; authorize device again");
+    }
 }
 Tokens OAuth::load() const {
     auto j = detail::read_private(token_path(config_));
-    if (j.empty())
+    if (j.empty() || j.value("reauthorization_required", false))
         return {};
     // Fail closed before parsing or using either credential. Legacy records
     // cannot prove their grant binding and must be replaced by a fresh login.

@@ -263,6 +263,26 @@ void tests() {
         }
     }
     {
+        Fixture f({{200, metadata()},
+                   {200, device()},
+                   {200, token()},
+                   {503, {{"error", "temporarily_unavailable"}}}});
+        auto c = config(f, root + "/uncertain-refresh");
+        okou::OAuth auth(c, http);
+        auto authorized = auth.poll(auth.begin()).tokens;
+        auth.save(authorized);
+        CHECK(!fails([&] { auth.refresh(authorized); }).empty());
+        CHECK(auth.load().access_token.empty());
+        auto marker = record(c.data_dir + "/tokens.json");
+        CHECK(marker["reauthorization_required"] == true);
+        CHECK(!marker.contains("refresh_token") && !marker.contains("access_token"));
+        CHECK(!fails([&] { auth.refresh(authorized); }).empty());
+        okou::OAuth restarted(c, http);
+        CHECK(restarted.load().access_token.empty());
+        CHECK(!fails([&] { restarted.refresh(authorized); }).empty());
+        CHECK(f.requests().size() == 4); // No automatic reuse, even after restart.
+    }
+    {
         auto m = metadata();
         Json resource = {{"authorization_servers", {"$BASE"}},
                          {"resource", "https://api.okou.ai/mcp"}};

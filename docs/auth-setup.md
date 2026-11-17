@@ -41,7 +41,7 @@ Minimal JSON (replace the public ID; no secret):
 ```json
 {
   "oauth_client_id": "YOUR_APPROVED_PUBLIC_CLIENT_ID",
-  "scopes": "openid profile offline_access user:org:read okou:chat:read okou:chat:send"
+  "scopes": "openid profile offline_access user:org:read okou:chat:read okou:chat:send okou:project:read okou:voice:transcribe"
 }
 ```
 
@@ -73,14 +73,14 @@ Use a separate `data_dir` per configuration if you need to retain multiple grant
 
 `begin()` returns a private `device_code`, public user code and verification URI(s). Show only the user code and verification links, never the device code or tokens. Main owns cancellation and scheduling: wait at least `interval` before **each** poll, increase it by at least five seconds on `slow_down`, stop at expiry, denial or cancellation, and avoid overlapping polls. `poll()` returns `pending`, `slow_down`, `authorized`, `denied`, or `expired`; other provider errors become sanitized errors without `error_description`.
 
-After authorization or refresh, main saves the returned Tokens. Refresh rotates the refresh token when provided, retaining the previous one when omitted. Do not automatically retry an interrupted refresh: a refresh token may have rotated even when the response was lost. Surface reauthorization if recovery is impossible. Access JWT payloads are decoded **without verification** solely for display, local expiry scheduling and realtime channel addressing. The API remains the authority. A user/org-bound token is required locally; load re-derives claims from the access token rather than trusting editable persisted user/org fields. Persisted expiry can only shorten the JWT expiry.
+After authorization or refresh, main saves the returned Tokens. Refresh rotates the refresh token when provided, retaining the previous one when omitted. Do not automatically retry an interrupted refresh: a refresh token may have rotated even when the response was lost. A failed token request writes a token-free reauthorization barrier before returning; subsequent refresh attempts and process restarts cannot reuse that generation. A fresh device authorization replaces the barrier. Discovery failures before a token request do not invalidate a grant. Access JWT payloads are decoded **without verification** solely for display, local expiry scheduling and realtime channel addressing. The API remains the authority. A user/org-bound token is required locally; load re-derives claims from the access token rather than trusting editable persisted user/org fields. Persisted expiry can only shorten the JWT expiry.
 
 Logout removes/fsyncs local credentials **before** best-effort revocation. Cancellation, discovery errors, network failure or a provider rejection cannot prevent the local clear. Revoking the refresh token is preferred; the process must also stop realtime and discard its in-memory token set in main. Deleting an SSD file is not guaranteed physical secure erasure, and failed remote revocation can leave a previously issued access token valid until expiry.
 
 ## HTTP contract and security
 
 - HTTPS with certificate and hostname verification and TLS 1.2 minimum. Redirect following is disabled for all requests; bearer tokens cannot be forwarded to a redirect target. Signed snapshot requests omit bearer and client identity headers.
-- Bearer API requests use `X-Client-Type: OkouZero`, `X-Client-Version: 0.1.0`, and a fresh random `X-Client-Request-Id`; no iOS identity or invented organization header. Multipart values are in-memory bytes, not local filenames to read.
+- Bearer API requests use `X-Client-Type: OkouZero`, `X-Client-Version` matching the compiled application version, and a fresh random `X-Client-Request-Id`; no iOS identity or invented organization header. Multipart values are in-memory bytes, not local filenames to read.
 - Connect timeout 10 seconds, total timeout 60 seconds, low-speed timeout 20 seconds, cancellation via libcurl progress callback. Gzip is transparently decoded. Maximum decoded response body 16 MiB and headers 64 KiB.
 - HTTP 2xx/3xx/4xx return `HttpResponse`; **every caller must check status** before interpreting a successful API response. OAuth reads the standard 400 error field. Network/cancellation/response-bound errors and 5xx throw sanitized `HttpError`. Non-read requests interrupted after transport starts, or receiving 5xx, are conservatively `uncertain=true`; preflight cancellation is not uncertain. No request is automatically replayed.
 - Errors contain only fixed descriptions/status, never request URL, body, token, provider error description or raw response. Debug/verbose curl logging is not enabled.
