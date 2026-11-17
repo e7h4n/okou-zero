@@ -1,3 +1,4 @@
+#include "okou/framebuffer.hpp"
 #include "okou/platform.hpp"
 #include <algorithm>
 #include <cstring>
@@ -99,9 +100,7 @@ Display::Display(bool desktop, const std::string &framebuffer, bool headless)
         if (p.fd < 0 || ioctl(p.fd, FBIOGET_FSCREENINFO, &p.fixed) ||
             ioctl(p.fd, FBIOGET_VSCREENINFO, &p.variable))
             throw std::runtime_error("Cannot open LCD framebuffer; check video-group access");
-        if (p.variable.xres != 320 || p.variable.yres != 170 || p.variable.bits_per_pixel != 16 ||
-            p.variable.red.offset != 11 || p.variable.green.offset != 5 ||
-            p.variable.blue.offset != 0)
+        if (!compatible_framebuffer(p.variable, p.fixed))
             throw std::runtime_error("LCD must be 320x170 RGB565");
         p.map_size = p.fixed.smem_len;
         auto *mapping = mmap(nullptr, p.map_size, PROT_READ | PROT_WRITE, MAP_SHARED, p.fd, 0);
