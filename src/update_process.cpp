@@ -1,4 +1,5 @@
 #include "update_process.hpp"
+#include "okou/build_config.hpp"
 #include <cerrno>
 #include <csignal>
 #include <fcntl.h>
@@ -49,7 +50,7 @@ UpdateProcess::~UpdateProcess() {
         close(pipe_);
 }
 bool UpdateProcess::start(bool install, const std::string &version) {
-    if (pid_ > 0 || (install && view_.status != UpdateStatus::ready))
+    if (!build::stable_updates || pid_ > 0 || (install && view_.status != UpdateStatus::ready))
         return false;
     int fds[2];
     if (pipe2(fds, O_CLOEXEC) < 0) {

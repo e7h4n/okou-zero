@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+
+namespace okou::build {
+inline constexpr char profile[] = "@OKOU_ZERO_BUILD_PROFILE@";
+inline constexpr char api_origin[] = "@OKOU_ZERO_API_ORIGIN@";
+inline constexpr char oauth_client_id[] = "@OKOU_ZERO_OAUTH_CLIENT_ID@";
+inline constexpr char storage_name[] = "@OKOU_ZERO_STORAGE_NAME@";
+inline constexpr bool stable_updates = @OKOU_ZERO_STABLE_UPDATES@;
+} // namespace okou::build

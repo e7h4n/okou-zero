@@ -72,6 +72,14 @@ The app prompts for a missing public client ID; optional settings are documented
 in [the example](config/config.example.json). Store local configuration in a 0700
 directory with the file mode 0600. No client secret belongs in this file.
 
+For test-device login, use the CI artifact ending in `-arm64-staging`. CI bundles
+only the `staging` Environment's `OKOU_ZERO_OAUTH_CLIENT_ID` public Variable;
+API/resource defaults are maintained in code and the issuer is discovered from
+API metadata. The UI is marked `[Test]`, default configuration/token storage is
+separate, and stable updates are disabled. See [build profiles](docs/auth-setup.md#bundled-build-profiles)
+for the current test API and remaining Preview/Clerk prerequisites. Production
+artifacts and signed releases never inherit the staging client ID.
+
 ## Signed updates
 
 Use only the [official GitHub Releases](https://github.com/e7h4n/okou-zero/releases).
