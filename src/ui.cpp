@@ -187,12 +187,13 @@ Action UI::handle(const Input &input) {
             drafts_[current.id] = draft;
             page = Page::threads;
             selected = 0;
-        } else if (input.key == Key::text && !recording &&
+        } else if (input.key == Key::text && !recording && !submitting && !uncertain &&
                    draft.size() + input.text.size() <= 16000) {
             draft += input.text;
-        } else if (input.key == Key::backspace && !recording)
+        } else if (input.key == Key::backspace && !recording && !submitting && !uncertain)
             erase_utf8(draft);
-        else if (input.key == Key::enter && input.shift && !recording && draft.size() < 16000)
+        else if (input.key == Key::enter && input.shift && !recording && !submitting &&
+                 !uncertain && draft.size() < 16000)
             draft += '\n';
         else if (input.key == Key::enter && !busy && !recording && !voice_pending && !submitting &&
                  !draft.empty() && !uncertain) {
@@ -384,7 +385,8 @@ void UI::render() {
             lv_obj_set_y(compose_text, 33 - lv_obj_get_height(compose_text));
         help = uncertain                ? "Send uncertain: refresh history; do not resend"
                : voice_pending && !busy ? "Voice retained: Ctrl+R retry   Esc discard"
-               : busy || submitting     ? status
+               : submitting             ? "Sending... please wait"
+               : busy                   ? status
                                         : "Enter send   Ctrl+R voice   Esc back";
     }
     auto *footer_text = label(footer_, help, 5, 3, 310, muted, 15);

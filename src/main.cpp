@@ -548,7 +548,7 @@ int main(int argc, char **argv) {
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--version") {
-                std::cout << "okou-zero " << OKOU_ZERO_VERSION << '\n';
+                std::cout << "Okou " << OKOU_ZERO_VERSION << '\n';
                 return 0;
             }
             if (arg == "--demo")
@@ -610,6 +610,8 @@ int main(int argc, char **argv) {
             ui.busy = false; // A background read must not unlock an outstanding send.
             check(ui.handle({Key::enter, {}, false, false}) == Action::none);
             auto sent_text = ui.draft;
+            ui.handle({Key::text, "not appended while sending", false, false});
+            check(ui.draft == sent_text);
             ui.complete_send(ui.current.id, sent_text, true);
             check(ui.draft == sent_text && ui.uncertain);
             check(ui.handle({Key::enter, {}, false, false}) == Action::none);

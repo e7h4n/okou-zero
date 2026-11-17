@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=okou
+Name=Okou
 Comment=Your personal AI assistant on Cardputer Zero
 Exec=/usr/bin/okou-zero
 Icon=/usr/share/icons/hicolor/96x96/apps/okou-zero.png
