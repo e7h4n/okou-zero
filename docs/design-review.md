@@ -25,6 +25,19 @@ This is a review of a source commit, **not** a live production authorization tes
 
 Do not solve the mismatch by weakening token validation, accepting an ID token as an access token, bundling a backend secret, or silently substituting the CLI token flow. A minimal companion change to the main API and a configured public OAuth application are expected prerequisites.
 
+## iOS behavior to preserve
+
+Reference paths below are under `ios/` in the pinned Okou commit:
+
+- `Packages/ChatData/Sources/ChatData/ChatSync.swift`: thread-list snapshots and incremental events have a cursor separate from each conversation's event snapshot/tail. Handle expired baselines by rebuilding; persist state and cursor atomically. Signed snapshot downloads must omit the bearer token.
+- `Okou/Services/RealtimeService.swift`: `/api/realtime/token` returns an Ably **TokenRequest**, not an assumed token string. Attach `user-org:<userID>:<workspaceID>` and `user:<userID>`; recover authoritative state on a gap.
+- `Okou/App/WorkspaceReadBootstrap.swift`: subscribe before the authoritative indicator read when possible, with a bounded HTTP fallback and a confirming read if attachment happened later.
+- `Okou/Domain/ChatInvalidation.swift`: `threadListChanged` refreshes list metadata, while `chatIndicatorsChanged` refreshes indicators. Do not reintroduce the historical list-change indicator fallback.
+- `Packages/ChatData/Sources/ChatData/ChatCommands.swift`: preserve stable client event identity and treat ambiguous sends as uncertain, not automatically retryable.
+- `Packages/ChatData/Sources/ChatData/VoiceInputClient.swift` and `VoiceDraftSession.swift`: 16 kHz mono PCM16, 15-second transcription windows with 2-second overlap, quota check, final segment, polish, then editable draft insertion. Ending dictation is not submitting a message. Cardputer recording persistence/limits still need a deliberate implementation choice.
+
+These are protocol/behavior observations, not copied application source. Do not send `X-Client-Type: iOS` from this client or invent an organization header as a substitute for an organization-bound token.
+
 ## Proposed user experience
 
 - Login: show a short user code and verification URL; optionally show a QR code. Honor provider polling intervals, slow-down responses, expiration and denial.
