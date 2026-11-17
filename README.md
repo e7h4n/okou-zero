@@ -58,7 +58,7 @@ On the device, after downloading and verifying the CI artifact:
 
 ```sh
 sha256sum -c SHA256SUMS
-sudo apt-get install ./okou-zero_0.2.2_arm64.deb
+sudo apt-get install ./okou-zero_0.2.3_arm64.deb
 ```
 
 The package adds an `Okou` entry in `/usr/share/APPLaunch/applications`. Start it
@@ -75,8 +75,10 @@ directory with the file mode 0600. No client secret belongs in this file.
 ## Signed updates
 
 Use only the [official GitHub Releases](https://github.com/e7h4n/okou-zero/releases).
-Version **0.2.2** is the native V1 signed-update baseline; obsolete Hello World
-release `v0.1.4` was deliberately cancelled and must not be published or installed.
+Version **0.2.2** is the native V1 signed-update baseline; **0.2.3** passed the
+real-device signed-upgrade flow ([acceptance evidence](docs/updates-acceptance.md)).
+The obsolete Hello World release `v0.1.4` was deliberately cancelled and must not
+be published or installed.
 The app checks for a stable update at launch without installing it automatically.
 Press **Ctrl+Alt+U** to explicitly confirm an offered update. The unprivileged
 updater verifies the signed manifest, version, arm64 package metadata, digest and
