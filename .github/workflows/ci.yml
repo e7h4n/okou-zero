@@ -42,7 +42,7 @@ jobs:
 
       - name: Exercise binary contract
         run: |
-          ./build/okou-zero --version | grep -F '0.1.0'
+          ./build/okou-zero --version | grep -Fx 'okou 0.1.1'
           timeout 30s ./build/okou-zero --headless --output build/headless.ppm
           timeout 30s ./build/okou-zero --headless --output build/headless-keys.ppm --keys enter,enter,esc
 
@@ -67,7 +67,7 @@ jobs:
       - name: Upload package, checksums, and renders
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: okou-zero-0.1.0-${{ matrix.arch }}
+          name: okou-zero-0.1.1-${{ matrix.arch }}
           path: |
             build/*.deb
             build/SHA256SUMS
