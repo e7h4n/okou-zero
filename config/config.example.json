@@ -1,8 +1,8 @@
 {
-  "api_origin": "https://api.okou.ai",
+  "api_origin": "https://pr-48263-api.vm6.ai",
   "oauth_issuer": "",
   "oauth_client_id": "",
-  "oauth_resource": "https://api.okou.ai/mcp",
+  "oauth_resource": "https://pr-48263-api.vm6.ai/mcp",
   "scopes": "openid profile offline_access user:org:read okou:chat:read okou:chat:send okou:project:read okou:voice:transcribe",
   "keyboard": "/dev/input/by-path/platform-3f804000.i2c-event",
   "framebuffer": "/dev/fb0",

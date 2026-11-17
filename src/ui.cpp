@@ -273,8 +273,6 @@ void UI::render() {
         title = current.title.empty() ? "Chat" : current.title;
     else if (page == Page::settings)
         title = "Okou / workspace";
-    if (std::string(build::profile) == "staging")
-        title = "[Test] " + title;
     label(header_, title, 8, 3, 240, ink, 20);
     label(header_,
           recording ? "REC"

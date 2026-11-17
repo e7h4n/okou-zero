@@ -4,7 +4,7 @@ Okou Zero is an independent MIT C++17 client. Its transport/authentication imple
 
 ## Operator setup required before login
 
-Production builds have no bundled OAuth client ID unless explicitly supplied at configure time. Staging builds bundle the public ID from the GitHub `staging` Environment variable `OKOU_ZERO_OAUTH_CLIENT_ID`; no client secret is embedded. An Okou administrator must provision the application in the matching Clerk instance:
+Official CI packages bundle the public OAuth client ID from the GitHub `staging` Environment variable `OKOU_ZERO_OAUTH_CLIENT_ID`. This Environment is only the configuration source: there is one standard package, not separate staging/production variants. An Okou administrator must provision the application in the matching Clerk instance:
 
 1. Enable **Public** and **Device authorization grant** for that application (`public: true`, `device_authorization_grant_enabled: true` in Clerk's administrative API). Enable refresh-token support / `offline_access` for the grant. The native client uses token endpoint authentication `none`, sends only `client_id`, and does not store or send a client secret. Device grant uses neither PKCE nor a redirect URI.
 2. Enable Organizations and allow `user:org:read`. Clerk's device verification page displays an Organization selector when this scope is requested. The user selects the workspace in that browser; the resulting access token must contain its `org_id`.
@@ -21,31 +21,17 @@ Sources checked 2026-11-17:
 - [How Clerk implements OAuth](https://clerk.com/docs/guides/configure/auth-strategies/oauth/how-clerk-implements-oauth)
 - Okou protocol references: `turbo/apps/api/src/lib/mcp-server-config.ts`, `signals/routes/mcp-server.ts`, `signals/external/clerk.ts`.
 
-## Bundled build profiles
+## Bundled defaults
 
-Only the public client ID is a GitHub Variable; API, issuer and resource are not additional GitHub settings.
+The standard package currently targets the companion backend PR Preview at `https://pr-48263-api.vm6.ai`. The resource is this origin plus `/mcp`; issuer is discovered from its OAuth resource metadata. These defaults live in code, so no additional GitHub API/issuer/resource Variables are needed. Only `OKOU_ZERO_OAUTH_CLIENT_ID` is injected by CI as a CMake string. It is public, not a secret. Main/tag builds fail closed if that Variable is missing; local/fork offline builds may leave it empty and show the setup screen.
 
-| Profile | Default API | Resource | Issuer | Stable updates |
-| --- | --- | --- | --- | --- |
-| `production` (default) | `https://api.okou.ai` | API + `/mcp` | Resource metadata discovery | Enabled |
-| `staging` | `https://pr-48263-api.vm6.ai` | API + `/mcp` | Resource metadata discovery | Disabled |
+Configure locally with `cmake -S . -B build -DOKOU_ZERO_OAUTH_CLIENT_ID=YOUR_PUBLIC_CLIENT_ID`. Runtime environment variables still override user configuration, which overrides bundled defaults. Existing user configuration is preserved, not silently rewritten. Existing grants remain bound to API/issuer/resource/client ID and require fresh authorization when those change. There is no special test storage directory, test UI label, or alternate updater channel; normal signed stable updates remain enabled.
 
-The staging origin is the companion backend's current PR Preview, **not** an assertion that shared staging main contains those endpoints. Change the staging origin in CMake when that backend moves; the public ID must belong to its advertised test issuer. This default does not bypass Preview protection or install missing Clerk scopes. A protected API still needs approved native transport access before login can succeed. Do not embed Preview bypass credentials in public builds.
-
-GitHub CI builds/tests both profiles on amd64 and ARM64. Each job uses its matching GitHub Environment. The `staging` Environment needs only `OKOU_ZERO_OAUTH_CLIENT_ID`. Production jobs deliberately do not consume the staging value. Forks/missing variables use an offline fixture ID for staging tests and do **not** upload that staging installable package. Download the artifact ending in `-arm64-staging` for the configured test client. Signed stable releases select only the production artifact.
-
-For a local test build (the ID is public, not a secret):
-
-```sh
-cmake -S . -B build-staging -DOKOU_ZERO_BUILD_PROFILE=staging \
-  -DOKOU_ZERO_OAUTH_CLIENT_ID=YOUR_TEST_PUBLIC_CLIENT_ID
-```
-
-Configuration precedence: runtime environment > user configuration > bundled build defaults. Explicit empty overrides remain supported. Staging uses `okou-zero-staging` instead of `okou-zero` below for both default configuration and data directories, so it does not pick up a production grant or configuration. The Debian package and executable names remain `okou-zero`; profiles replace one another rather than coinstall. Staging never starts the production updater, and no staging artifact is published to the stable channel. Installing another profile manually is an explicit operation; tokens remain isolated/bound and must never be rebound.
+Preview is the current service target, **not** proof that authentication works end to end. Its access protection still requires approved native ingress access; the Clerk application must allow the requested Project/Voice scopes. No bypass credential is embedded. Keep this Preview deployed while clients target it. Moving to production later requires a deliberate default-origin change and fresh authorization; a normal client ID is not a way to bypass Preview protection.
 
 ## Configuration
 
-Default production paths:
+Default paths:
 
 - Configuration: `$XDG_CONFIG_HOME/okou-zero/config.json`, or `$HOME/.config/okou-zero/config.json` if XDG_CONFIG_HOME is unset or relative.
 - Credentials: `<data_dir>/tokens.json`; default `data_dir` is `$XDG_DATA_HOME/okou-zero`, or `$HOME/.local/share/okou-zero` if XDG_DATA_HOME is unset or relative.

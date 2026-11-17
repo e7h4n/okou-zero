@@ -11,17 +11,16 @@ concurrency:
   cancel-in-progress: true
 jobs:
   native:
-    name: Native ${{ matrix.profile }} ${{ matrix.arch }} protocols, UI and package
+    name: Native ${{ matrix.arch }} protocols, UI and package
     runs-on: ${{ matrix.runner }}
-    environment: ${{ matrix.profile }}
+    # Configuration source only; this is the single standard package, not a staging variant.
+    environment: staging
     timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
-        profile: [production, staging]
-        arch: [amd64, arm64]
         include:
           - runner: ubuntu-24.04
             arch: amd64
@@ -48,20 +47,20 @@ jobs:
           clang-format --dry-run --Werror include/okou/*.hpp src/*.cpp tests/*.cpp
       - name: Configure native build
         env:
-          BUILD_PROFILE: ${{ matrix.profile }}
-          PUBLIC_CLIENT_ID: ${{ matrix.profile == 'staging' && vars.OKOU_ZERO_OAUTH_CLIENT_ID || '' }}
+          PUBLIC_CLIENT_ID: ${{ vars.OKOU_ZERO_OAUTH_CLIENT_ID }}
           BUILD_TYPE: ${{ matrix.build_type }}
           BUILD_DESKTOP: ${{ matrix.desktop }}
+          TRUSTED_PUBLISH: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
         shell: bash
         run: |
-          # Forks can run offline tests without accessing an owner's environment variable.
-          # A fixture-only staging build is never uploaded as an installable artifact.
-          if [[ "$BUILD_PROFILE" == staging && -z "$PUBLIC_CLIENT_ID" ]]; then
-            PUBLIC_CLIENT_ID=ci-fixture-public
+          # Forks may run offline tests without a configured public client.
+          # Main/tag builds must never silently publish an unconfigured package.
+          if [[ "$TRUSTED_PUBLISH" == true && -z "$PUBLIC_CLIENT_ID" ]]; then
+            echo 'Missing public OKOU_ZERO_OAUTH_CLIENT_ID Variable' >&2
+            exit 1
           fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_BUILD_PROFILE="$BUILD_PROFILE" \
-            -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID"
+            -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID"
       - name: Read configured CMake version
         id: version
         shell: bash
@@ -95,17 +94,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: native-${{ matrix.profile }}-${{ matrix.arch }}-test-evidence
+          name: native-${{ matrix.arch }}-test-evidence
           path: |
             build/ui-*.bmp
             build/ui-*.ppm
             build/Testing/Temporary/LastTest.log
           retention-days: 14
       - name: Publish package artifact
-        if: matrix.profile == 'production' || vars.OKOU_ZERO_OAUTH_CLIENT_ID != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: okou-zero-${{ steps.version.outputs.version }}-${{ matrix.arch }}${{ matrix.profile == 'staging' && '-staging' || '' }}
+          name: okou-zero-${{ steps.version.outputs.version }}-${{ matrix.arch }}
           path: |
             build/okou-zero_*.deb
             build/SHA256SUMS

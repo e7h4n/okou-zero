@@ -479,7 +479,7 @@ void tests() {
     }
     {
         auto c = okou::load_config();
-        CHECK(c.data_dir == root + "/data/" + okou::build::storage_name);
+        CHECK(c.data_dir == root + "/data/okou-zero");
         c.oauth_client_id = "configured-public";
         c.oauth_issuer = "https://issuer.example";
         okou::save_config(c);

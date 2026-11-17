@@ -25,7 +25,7 @@ std::string data_home() {
     auto d = env("XDG_DATA_HOME");
     if (d.empty() || d[0] != '/')
         d = home() + "/.local/share";
-    return d + "/" + build::storage_name;
+    return d + "/okou-zero";
 }
 std::string config_path() {
     auto override = env("OKOU_ZERO_CONFIG");
@@ -34,7 +34,7 @@ std::string config_path() {
     auto d = env("XDG_CONFIG_HOME");
     if (d.empty() || d[0] != '/')
         d = home() + "/.config";
-    return d + "/" + build::storage_name + "/config.json";
+    return d + "/okou-zero/config.json";
 }
 struct Fd {
     int fd = -1;
