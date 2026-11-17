@@ -1,3 +1,4 @@
+#include "okou/dictation.hpp"
 #include "okou/ui.hpp"
 #include <algorithm>
 #include <chrono>
@@ -11,8 +12,10 @@
 namespace okou {
 namespace {
 std::atomic_bool interrupted{false};
-void interrupt(int) { interrupted.store(true); }
-using Update = std::function<void(UI&)>;
+void interrupt(int) {
+    interrupted.store(true);
+}
+using Update = std::function<void(UI &)>;
 class Engine {
     struct Session {
         Config config;
@@ -27,12 +30,16 @@ class Engine {
     std::shared_ptr<Session> session_;
     std::unique_ptr<Realtime> realtime_;
     std::unique_ptr<AudioCapture> audio_;
+    std::unique_ptr<Dictation> dictation_;
+    std::string voice_thread_;
+    std::atomic_bool sending_{false}, voice_cancelled_{false};
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::function<void()>> tasks_;
     std::deque<Update> updates_;
     std::thread worker_;
-    std::atomic_bool stopping_{false}, metadata_pending_{false}, indicators_pending_{false}, history_pending_{false};
+    std::atomic_bool stopping_{false}, metadata_pending_{false}, indicators_pending_{false},
+        history_pending_{false};
     std::string selected_thread_;
     Json indicators_ = Json::object();
     void emit(Update update) {
@@ -40,64 +47,98 @@ class Engine {
         updates_.push_back(std::move(update));
     }
     void enqueue(std::function<void()> task) {
-        { std::lock_guard<std::mutex> guard(mutex_); tasks_.push_back(std::move(task)); }
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            tasks_.push_back(std::move(task));
+        }
         cv_.notify_all();
     }
-    void ensure(Session& s) {
-        if (!s.client) throw std::runtime_error("Sign in to continue");
-        auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    void ensure(Session &s) {
+        if (!s.client)
+            throw std::runtime_error("Sign in to continue");
+        auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
         if (s.tokens.expires_at <= now + 60) {
             s.tokens = s.auth.refresh(s.tokens);
             s.auth.save(s.tokens);
             s.client->set_tokens(s.tokens);
         }
     }
-    void error(const std::exception& ex) {
-        const auto* http = dynamic_cast<const HttpError*>(&ex);
-        bool uncertain = http && http->uncertain;
+    void error(const std::exception &ex) {
+        const auto *http = dynamic_cast<const HttpError *>(&ex);
         long status = http ? http->status : 0;
-        std::string text = status == 401 ? "Sign-in expired; sign in again" : status == 403
-                        ? "Access not granted; check OAuth scopes" : uncertain
-                        ? "Send uncertain: refresh history; do not resend" : "Could not complete request; Ctrl+L to refresh";
-        emit([text, uncertain](UI& ui) { ui.status = text; ui.busy = false; if (uncertain) ui.uncertain = true; });
+        std::string text = status == 401   ? "Sign-in expired; sign in again"
+                           : status == 403 ? "Access not granted; check OAuth scopes"
+                                           : "Could not complete request; Ctrl+L to refresh";
+        emit([text](UI &ui) {
+            ui.status = text;
+            ui.busy = false;
+        });
     }
-    static void apply_indicators(UI& ui, const Json& indicators) {
+    static void apply_indicators(UI &ui, const Json &indicators) {
         auto threads = indicators.value("threads", Json::object());
-        for (auto& thread : ui.list.threads) {
+        for (auto &thread : ui.list.threads) {
             auto value = threads.value(thread.id, std::string{});
             thread.active = value == "active";
             thread.unread = value == "unread" && !thread.muted;
         }
     }
     void stop_realtime() {
-        if (realtime_) { realtime_->stop(); realtime_.reset(); }
-        emit([](UI& ui) { ui.live = false; });
+        if (realtime_) {
+            realtime_->stop();
+            realtime_.reset();
+        }
+        emit([](UI &ui) { ui.live = false; });
     }
-    void start_realtime(const std::shared_ptr<Session>& s) {
+    void start_realtime(const std::shared_ptr<Session> &s) {
         stop_realtime();
-        realtime_ = std::make_unique<Realtime>([s] {
-            std::lock_guard<std::mutex> guard(s->io);
-            if (s->cancelled.load() || !s->client) throw std::runtime_error("Session closed");
-            auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-            if (s->tokens.expires_at <= now + 60) {
-                s->tokens = s->auth.refresh(s->tokens);
-                s->auth.save(s->tokens);
-                s->client->set_tokens(s->tokens);
-            }
-            return s->client->realtime_token();
-        }, s->tokens.user_id, s->tokens.org_id, [this, weak = std::weak_ptr<Session>(s)](const std::string& name) {
-            auto current = weak.lock();
-            if (!current || current != std::atomic_load(&session_) || stopping_) return;
-            if (name == "connection:connected") emit([](UI& ui) { ui.live = true; ui.status = "Connected"; });
-            else if (name == "connection:disconnected") emit([](UI& ui) { ui.live = false; ui.status = "Reconnecting..."; });
-            if (name == "connection:gap") { refresh(false); refresh_indicators(); refresh_history(); }
-            else if (name == "threadListChanged") refresh(false);
-            else if (name == "chatIndicatorsChanged" || name == "chatThreadReadCursorUpdated") refresh_indicators();
-            else if (name.rfind("chatThreadMessageCreated:", 0) == 0 || name.rfind("chatThreadDetailChanged:", 0) == 0) refresh_history();
-        });
+        realtime_ = std::make_unique<Realtime>(
+            [s] {
+                std::lock_guard<std::mutex> guard(s->io);
+                if (s->cancelled.load() || !s->client)
+                    throw std::runtime_error("Session closed");
+                auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+                if (s->tokens.expires_at <= now + 60) {
+                    s->tokens = s->auth.refresh(s->tokens);
+                    s->auth.save(s->tokens);
+                    s->client->set_tokens(s->tokens);
+                }
+                return s->client->realtime_token();
+            },
+            s->tokens.user_id, s->tokens.org_id,
+            [this, weak = std::weak_ptr<Session>(s)](const std::string &name) {
+                auto current = weak.lock();
+                if (!current || current != std::atomic_load(&session_) || stopping_)
+                    return;
+                if (name == "connection:connected")
+                    emit([](UI &ui) {
+                        ui.live = true;
+                        ui.status = "Connected";
+                    });
+                else if (name == "connection:disconnected")
+                    emit([](UI &ui) {
+                        ui.live = false;
+                        ui.status = "Reconnecting...";
+                    });
+                if (name == "connection:gap") {
+                    refresh(false);
+                    refresh_indicators();
+                    refresh_history();
+                } else if (name == "threadListChanged")
+                    refresh(false);
+                else if (name == "chatIndicatorsChanged" || name == "chatThreadReadCursorUpdated")
+                    refresh_indicators();
+                else if (name.rfind("chatThreadMessageCreated:", 0) == 0 ||
+                         name.rfind("chatThreadDetailChanged:", 0) == 0)
+                    refresh_history();
+            });
         realtime_->start();
     }
-public:
+
+  public:
     explicit Engine(Config config) : session_(std::make_shared<Session>(std::move(config))) {
         worker_ = std::thread([this] {
             while (!stopping_) {
@@ -105,10 +146,17 @@ public:
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
                     cv_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
-                    if (stopping_) break;
-                    task = std::move(tasks_.front()); tasks_.pop_front();
+                    if (stopping_)
+                        break;
+                    task = std::move(tasks_.front());
+                    tasks_.pop_front();
                 }
-                try { task(); } catch (const std::exception& ex) { if (!stopping_) error(ex); }
+                try {
+                    task();
+                } catch (const std::exception &ex) {
+                    if (!stopping_)
+                        error(ex);
+                }
             }
         });
     }
@@ -117,34 +165,60 @@ public:
         auto s = std::atomic_load(&session_);
         s->cancelled = true;
         cv_.notify_all();
-        if (worker_.joinable()) worker_.join();
+        if (worker_.joinable())
+            worker_.join();
         stop_realtime();
-        if (audio_) audio_->cancel();
+        if (audio_)
+            audio_->cancel();
     }
-    bool drain(UI& ui) {
+    bool drain(UI &ui) {
         std::deque<Update> batch;
-        { std::lock_guard<std::mutex> guard(mutex_); batch.swap(updates_); }
-        for (auto& update : batch) update(ui);
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            batch.swap(updates_);
+        }
+        for (auto &update : batch)
+            update(ui);
         return !batch.empty();
     }
     void initialize() {
         enqueue([this] {
             auto s = std::atomic_load(&session_);
             if (s->config.oauth_client_id.empty()) {
-                emit([](UI& ui) { ui.page = Page::setup; ui.busy = false; ui.status = "See docs/auth-setup.md"; });
+                emit([](UI &ui) {
+                    ui.page = Page::setup;
+                    ui.busy = false;
+                    ui.status = "See docs/auth-setup.md";
+                });
                 return;
             }
             std::lock_guard<std::mutex> guard(s->io);
             s->tokens = s->auth.load();
-            if (s->tokens.access_token.empty()) { emit([](UI& ui) { ui.page = Page::login; ui.busy = false; }); return; }
+            if (s->tokens.access_token.empty()) {
+                emit([](UI &ui) {
+                    ui.page = Page::login;
+                    ui.busy = false;
+                });
+                return;
+            }
             s->client = std::make_unique<Client>(s->config, s->http, s->tokens);
             ensure(*s);
             auto tokens = s->tokens;
-            emit([tokens](UI& ui) { ui.user_id = tokens.user_id; ui.org_id = tokens.org_id; ui.page = Page::threads; ui.busy = true; ui.status = "Loading chats..."; });
-            enqueue([this, s] { start_realtime(s); refresh(false); refresh_indicators(); });
+            emit([tokens](UI &ui) {
+                ui.user_id = tokens.user_id;
+                ui.org_id = tokens.org_id;
+                ui.page = Page::threads;
+                ui.busy = true;
+                ui.status = "Loading chats...";
+            });
+            enqueue([this, s] {
+                start_realtime(s);
+                refresh(false);
+                refresh_indicators();
+            });
         });
     }
-    void configure(const std::string& id) {
+    void configure(const std::string &id) {
         enqueue([this, id] {
             auto old = std::atomic_load(&session_);
             Config cfg = old->config;
@@ -152,7 +226,12 @@ public:
             save_config(cfg);
             auto s = std::make_shared<Session>(cfg);
             std::atomic_store(&session_, s);
-            emit([](UI& ui) { ui.draft.clear(); ui.page = Page::login; ui.busy = false; ui.status = "Press Enter to sign in"; });
+            emit([](UI &ui) {
+                ui.draft.clear();
+                ui.page = Page::login;
+                ui.busy = false;
+                ui.status = "Press Enter to sign in";
+            });
         });
     }
     void login() {
@@ -161,21 +240,45 @@ public:
             auto s = std::atomic_load(&session_);
             s->cancelled = false;
             DeviceCode code;
-            { std::lock_guard<std::mutex> guard(s->io); code = s->auth.begin(); }
-            emit([code](UI& ui) { ui.page = Page::login; ui.busy = true; ui.user_code = code.user_code; ui.verification_uri = code.verification_uri; ui.status = "Choose your workspace when approving"; });
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(code.expires_in);
+            {
+                std::lock_guard<std::mutex> guard(s->io);
+                code = s->auth.begin();
+            }
+            emit([code](UI &ui) {
+                ui.page = Page::login;
+                ui.busy = true;
+                ui.user_code = code.user_code;
+                ui.verification_uri = code.verification_uri;
+                ui.status = "Choose your workspace when approving";
+            });
+            auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::seconds(code.expires_in);
             int interval = std::max(1, code.interval);
             while (!stopping_ && std::chrono::steady_clock::now() < deadline) {
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
-                    if (cv_.wait_for(lock, std::chrono::seconds(interval), [this] { return stopping_.load(); })) return;
+                    if (cv_.wait_for(lock, std::chrono::seconds(interval),
+                                     [this] { return stopping_.load(); }))
+                        return;
                 }
                 PollResult result;
-                { std::lock_guard<std::mutex> guard(s->io); result = s->auth.poll(code); }
-                if (result.state == PollState::pending) continue;
-                if (result.state == PollState::slow_down) { interval += 5; continue; }
+                {
+                    std::lock_guard<std::mutex> guard(s->io);
+                    result = s->auth.poll(code);
+                }
+                if (result.state == PollState::pending)
+                    continue;
+                if (result.state == PollState::slow_down) {
+                    interval += 5;
+                    continue;
+                }
                 if (result.state == PollState::denied || result.state == PollState::expired) {
-                    emit([](UI& ui) { ui.busy = false; ui.user_code.clear(); ui.verification_uri.clear(); ui.status = "Code expired or denied; Enter to try again"; });
+                    emit([](UI &ui) {
+                        ui.busy = false;
+                        ui.user_code.clear();
+                        ui.verification_uri.clear();
+                        ui.status = "Code expired or denied; Enter to try again";
+                    });
                     return;
                 }
                 {
@@ -186,162 +289,367 @@ public:
                     s->auth.save(s->tokens);
                     s->client = std::make_unique<Client>(s->config, s->http, s->tokens);
                 }
-                indicators_ = Json::object(); selected_thread_.clear();
+                indicators_ = Json::object();
+                selected_thread_.clear();
                 auto tokens = s->tokens;
-                emit([tokens](UI& ui) { ui.user_id = tokens.user_id; ui.org_id = tokens.org_id; ui.list = {}; ui.messages.clear(); ui.draft.clear(); ui.user_code.clear(); ui.verification_uri.clear(); ui.page = Page::threads; ui.status = "Loading chats..."; });
-                start_realtime(s); refresh(false); refresh_indicators(); return;
+                emit([tokens](UI &ui) {
+                    ui.reset_account();
+                    ui.user_id = tokens.user_id;
+                    ui.org_id = tokens.org_id;
+                    ui.page = Page::threads;
+                    ui.busy = true;
+                    ui.status = "Loading chats...";
+                });
+                start_realtime(s);
+                refresh(false);
+                refresh_indicators();
+                return;
             }
-            if (!stopping_) emit([](UI& ui) { ui.busy = false; ui.user_code.clear(); ui.status = "Code expired; Enter to try again"; });
+            if (!stopping_)
+                emit([](UI &ui) {
+                    ui.busy = false;
+                    ui.user_code.clear();
+                    ui.status = "Code expired; Enter to try again";
+                });
         });
     }
     void refresh(bool include_indicators = true) {
-        if (metadata_pending_.exchange(true)) return;
+        if (metadata_pending_.exchange(true))
+            return;
         enqueue([this, include_indicators] {
             metadata_pending_ = false;
             auto s = std::atomic_load(&session_);
             ListState list;
-            { std::lock_guard<std::mutex> guard(s->io); ensure(*s); list = s->client->list(false); }
+            {
+                std::lock_guard<std::mutex> guard(s->io);
+                ensure(*s);
+                list = s->client->list(false);
+            }
             auto indicators = indicators_;
-            emit([list = std::move(list), indicators](UI& ui) mutable { ui.list = std::move(list); apply_indicators(ui, indicators); ui.busy = false; ui.status = "Up to date"; });
-            if (include_indicators) refresh_indicators();
+            emit([list = std::move(list), indicators](UI &ui) mutable {
+                ui.list = std::move(list);
+                apply_indicators(ui, indicators);
+                ui.busy = false;
+                ui.status = "Up to date";
+            });
+            if (include_indicators)
+                refresh_indicators();
         });
     }
     void refresh_indicators() {
-        if (indicators_pending_.exchange(true)) return;
+        if (indicators_pending_.exchange(true))
+            return;
         enqueue([this] {
             indicators_pending_ = false;
             auto s = std::atomic_load(&session_);
-            { std::lock_guard<std::mutex> guard(s->io); ensure(*s); indicators_ = s->client->indicators(); }
+            {
+                std::lock_guard<std::mutex> guard(s->io);
+                ensure(*s);
+                indicators_ = s->client->indicators();
+            }
             auto indicators = indicators_;
-            emit([indicators](UI& ui) { apply_indicators(ui, indicators); });
+            emit([indicators](UI &ui) { apply_indicators(ui, indicators); });
         });
     }
     void refresh_history() {
-        if (history_pending_.exchange(true)) return;
+        if (history_pending_.exchange(true))
+            return;
         enqueue([this] {
             history_pending_ = false;
-            if (selected_thread_.empty()) return;
+            if (selected_thread_.empty())
+                return;
             auto id = selected_thread_;
             auto s = std::atomic_load(&session_);
             std::vector<Message> messages;
             bool pending = false;
-            { std::lock_guard<std::mutex> guard(s->io); ensure(*s); messages = s->client->history(id); pending = s->client->has_pending_send(id); }
-            emit([id, messages = std::move(messages), pending](UI& ui) mutable {
-                if (ui.current.id == id) { ui.messages = std::move(messages); ui.uncertain = pending; ui.busy = false; ui.status = pending ? "Send uncertain; do not resend" : "Up to date"; }
+            {
+                std::lock_guard<std::mutex> guard(s->io);
+                ensure(*s);
+                messages = s->client->history(id);
+                pending = s->client->has_pending_send(id);
+            }
+            emit([id, messages = std::move(messages), pending](UI &ui) mutable {
+                ui.reconcile_send(id, pending);
+                if (ui.current.id == id) {
+                    ui.messages = std::move(messages);
+                    ui.busy = false;
+                    ui.status = pending ? "Send uncertain; do not resend" : "Up to date";
+                }
             });
         });
     }
-    void open(const Thread& thread) {
+    void open(const Thread &thread) {
         enqueue([this, thread] {
             selected_thread_ = thread.id;
             refresh_history();
             auto s = std::atomic_load(&session_);
-            { std::lock_guard<std::mutex> guard(s->io); ensure(*s); s->client->mark_read(thread.id); }
+            {
+                std::lock_guard<std::mutex> guard(s->io);
+                ensure(*s);
+                s->client->mark_read(thread.id);
+            }
             refresh_indicators();
         });
     }
-    void send(const Thread& thread, const std::string& text) {
+    void send(const Thread &thread, const std::string &text) {
+        if (sending_.exchange(true))
+            return;
         enqueue([this, thread, text] {
-            auto s = std::atomic_load(&session_);
-            SendResult result;
-            { std::lock_guard<std::mutex> guard(s->io); ensure(*s); result = s->client->send(thread, text); }
-            emit([id = thread.id, text, uncertain = result.uncertain](UI& ui) {
-                if (ui.current.id == id) {
-                    if (!uncertain && ui.draft == text) ui.draft.clear();
-                    ui.uncertain = uncertain;
+            try {
+                auto s = std::atomic_load(&session_);
+                SendResult result;
+                {
+                    std::lock_guard<std::mutex> guard(s->io);
+                    ensure(*s);
+                    result = s->client->send(thread, text);
                 }
-                ui.busy = false;
-                ui.status = uncertain ? "Send uncertain; do not resend" : "Message accepted";
-            });
-            refresh_history(); refresh_indicators();
+                emit([id = thread.id, text, uncertain = result.uncertain](UI &ui) {
+                    ui.complete_send(id, text, uncertain);
+                    ui.busy = false;
+                    ui.status = uncertain ? "Send uncertain; do not resend" : "Message accepted";
+                });
+                sending_ = false;
+                refresh_history();
+                refresh_indicators();
+            } catch (...) {
+                sending_ = false;
+                emit([](UI &ui) { ui.submitting = false; });
+                throw;
+            }
         });
     }
-    void voice(bool finish) {
-        enqueue([this, finish] {
+    void voice(bool finish, const std::string &thread_id) {
+        voice_cancelled_ = false;
+        enqueue([this, finish, thread_id] {
             auto s = std::atomic_load(&session_);
-            if (!finish) {
-                audio_ = std::make_unique<AudioCapture>(s->config.capture_device);
-                audio_->start();
-                emit([](UI& ui) { ui.recording = true; ui.busy = false; ui.status = "Recording; Ctrl+R finish, Esc cancel"; });
-                return;
+            try {
+                if (!finish) {
+                    voice_thread_ = thread_id;
+                    audio_ = std::make_unique<AudioCapture>(s->config.capture_device);
+                    if (voice_cancelled_)
+                        return;
+                    audio_->start();
+                    emit([](UI &ui) {
+                        ui.recording = true;
+                        ui.voice_working = false;
+                        ui.busy = false;
+                        ui.status = "Recording; Ctrl+R finish, Esc cancel";
+                    });
+                    return;
+                }
+                if (voice_thread_ != thread_id)
+                    throw std::runtime_error("Recording belongs to another draft");
+                if (audio_) {
+                    auto pcm = audio_->finish();
+                    audio_.reset();
+                    dictation_ = std::make_unique<Dictation>(thread_id, std::move(pcm));
+                }
+                if (!dictation_) {
+                    emit([](UI &ui) {
+                        ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
+                    });
+                    return;
+                }
+                emit([](UI &ui) {
+                    ui.recording = false;
+                    ui.voice_pending = true;
+                    ui.busy = true;
+                    ui.status = "Transcribing...";
+                });
+                auto text = dictation_->process(
+                    [this, s](const std::vector<std::int16_t> &pcm, const std::string &previous,
+                              double overlap) {
+                        std::lock_guard<std::mutex> guard(s->io);
+                        ensure(*s);
+                        return s->client->transcribe(pcm, previous, overlap);
+                    },
+                    [this, s](const std::vector<std::string> &segments) {
+                        std::lock_guard<std::mutex> guard(s->io);
+                        ensure(*s);
+                        return s->client->polish(segments);
+                    },
+                    [this] { return stopping_.load() || voice_cancelled_.load(); });
+                if (voice_cancelled_ || stopping_)
+                    return;
+                dictation_.reset();
+                emit([thread_id, text](UI &ui) {
+                    ui.append_dictation(thread_id, text);
+                    ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
+                    ui.status = "Dictation added to draft; review before sending";
+                });
+            } catch (const std::exception &ex) {
+                if (audio_) {
+                    audio_->cancel();
+                    audio_.reset();
+                }
+                bool retained = dictation_ && dictation_->pending() && !voice_cancelled_;
+                if (!retained)
+                    dictation_.reset();
+                error(ex);
+                emit([retained](UI &ui) {
+                    ui.recording = ui.voice_working = ui.busy = false;
+                    ui.voice_pending = retained;
+                    ui.status = retained ? "Voice retained: Ctrl+R retry; Esc discard"
+                                         : "Recording stopped; draft unchanged";
+                });
             }
-            if (!audio_) return;
-            auto pcm = audio_->finish(); audio_.reset();
-            emit([](UI& ui) { ui.recording = false; ui.busy = true; ui.status = "Transcribing..."; });
-            std::vector<std::string> segments;
-            constexpr std::size_t window = 15 * 16000, step = 13 * 16000;
-            for (std::size_t start = 0; start < pcm.size() && !stopping_; start += step) {
-                auto end = std::min(start + window, pcm.size());
-                if (start > 0 && end - start <= 2 * 16000) break;
-                std::vector<std::int16_t> slice(pcm.begin() + static_cast<std::ptrdiff_t>(start), pcm.begin() + static_cast<std::ptrdiff_t>(end));
-                std::string previous = segments.empty() ? "" : segments.back();
-                std::string transcript;
-                { std::lock_guard<std::mutex> guard(s->io); ensure(*s); transcript = s->client->transcribe(slice, previous, start ? 2.0 : 0.0); }
-                if (!transcript.empty()) segments.push_back(std::move(transcript));
-                if (end == pcm.size()) break;
-            }
-            std::string text;
-            if (!segments.empty()) {
-                std::lock_guard<std::mutex> guard(s->io); ensure(*s); text = s->client->polish(segments);
-            }
-            emit([text](UI& ui) { if (!text.empty()) { if (!ui.draft.empty()) ui.draft += ' '; ui.draft += text; } ui.busy = false; ui.status = "Dictation added to draft; review before sending"; });
         });
     }
     void cancel_voice() {
-        enqueue([this] { if (audio_) { audio_->cancel(); audio_.reset(); } emit([](UI& ui) { ui.recording = false; ui.busy = false; ui.status = "Recording discarded"; }); });
+        voice_cancelled_ = true;
+        enqueue([this] {
+            if (audio_) {
+                audio_->cancel();
+                audio_.reset();
+            }
+            dictation_.reset();
+            voice_thread_.clear();
+            emit([](UI &ui) {
+                ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
+                ui.status = "Recording discarded";
+            });
+        });
     }
     void logout(bool switch_workspace) {
         enqueue([this, switch_workspace] {
             stop_realtime();
-            if (audio_) { audio_->cancel(); audio_.reset(); }
+            if (audio_) {
+                audio_->cancel();
+                audio_.reset();
+            }
+            dictation_.reset();
+            voice_thread_.clear();
             auto s = std::atomic_load(&session_);
-            { std::lock_guard<std::mutex> guard(s->io); s->auth.logout(s->tokens); s->tokens = {}; s->client.reset(); }
-            selected_thread_.clear(); indicators_ = Json::object();
-            emit([switch_workspace](UI& ui) { ui.list = {}; ui.messages.clear(); ui.draft.clear(); ui.current = {}; ui.user_id.clear(); ui.org_id.clear(); ui.recording = false; ui.uncertain = false; ui.live = false; ui.busy = false; ui.page = Page::login; ui.status = switch_workspace ? "Sign in and approve the new workspace" : "Signed out"; });
+            {
+                std::lock_guard<std::mutex> guard(s->io);
+                s->auth.logout(s->tokens);
+                s->tokens = {};
+                s->client.reset();
+            }
+            selected_thread_.clear();
+            indicators_ = Json::object();
+            emit([switch_workspace](UI &ui) {
+                ui.reset_account();
+                ui.page = Page::login;
+                ui.status =
+                    switch_workspace ? "Sign in and approve the new workspace" : "Signed out";
+            });
         });
     }
 };
 } // namespace
 } // namespace okou
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     using namespace okou;
     try {
-        bool demo = false, self_test = false;
+        bool demo = false, self_test = false, headless = false;
         std::string screen = "threads", screenshot, config_path;
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
-            if (arg == "--version") { std::cout << "okou-zero " << OKOU_ZERO_VERSION << '\n'; return 0; }
-            if (arg == "--demo") demo = true;
-            else if (arg == "--demo-screen" && i + 1 < argc) { demo = true; screen = argv[++i]; }
-            else if (arg == "--self-test-ui") { demo = self_test = true; }
-            else if (arg == "--screenshot" && i + 1 < argc) screenshot = argv[++i];
-            else if (arg == "--config" && i + 1 < argc) config_path = argv[++i];
+            if (arg == "--version") {
+                std::cout << "okou-zero " << OKOU_ZERO_VERSION << '\n';
+                return 0;
+            }
+            if (arg == "--demo")
+                demo = true;
+            else if (arg == "--headless") {
+                headless = demo = true;
+            } else if (arg == "--demo-screen" && i + 1 < argc) {
+                demo = true;
+                screen = argv[++i];
+            } else if (arg == "--self-test-ui") {
+                demo = self_test = true;
+            } else if ((arg == "--screenshot" || arg == "--output") && i + 1 < argc)
+                screenshot = argv[++i];
+            else if (arg == "--config" && i + 1 < argc)
+                config_path = argv[++i];
             else if (arg == "--help") {
-                std::cout << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen login|threads|projects|chat]\n  --screenshot PATH (simulator only)\n  --self-test-ui\n"; return 0;
-            } else throw std::runtime_error("Unknown command-line option");
+                std::cout << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen "
+                             "login|threads|projects|chat]\n  --screenshot PATH (simulator only)\n "
+                             " --self-test-ui\n";
+                return 0;
+            } else
+                throw std::runtime_error("Unknown command-line option");
         }
-        if (!config_path.empty()) setenv("OKOU_ZERO_CONFIG", config_path.c_str(), 1);
+        if (!config_path.empty())
+            setenv("OKOU_ZERO_CONFIG", config_path.c_str(), 1);
         auto config = load_config(config_path);
-        std::signal(SIGINT, interrupt); std::signal(SIGTERM, interrupt);
+        std::signal(SIGINT, interrupt);
+        std::signal(SIGTERM, interrupt);
         lv_init();
-        Display display(OKOU_ZERO_DESKTOP, config.framebuffer);
-        Keyboard keyboard(OKOU_ZERO_DESKTOP, config.keyboard);
+        Display display(OKOU_ZERO_DESKTOP, config.framebuffer, headless);
+        std::unique_ptr<Keyboard> keyboard;
+        if (!headless)
+            keyboard = std::make_unique<Keyboard>(OKOU_ZERO_DESKTOP, config.keyboard);
+        if (headless && screenshot.empty())
+            screenshot = "okou-zero.ppm";
         UI ui(display.get());
         std::unique_ptr<Engine> engine;
-        if (demo) ui.demo(screen);
-        else { ui.busy = true; engine = std::make_unique<Engine>(config); engine->initialize(); }
+        if (demo)
+            ui.demo(screen);
+        else {
+            ui.busy = true;
+            engine = std::make_unique<Engine>(config);
+            engine->initialize();
+        }
         if (self_test) {
-            auto check = [](bool condition) { if (!condition) throw std::runtime_error("UI keyboard test failed"); };
-            ui.handle({Key::down, {}, false, false}); check(ui.selected == 1);
-            check(ui.handle({Key::enter, {}, false, false}) == Action::open); check(ui.page == Page::chat);
+            auto check = [](bool condition) {
+                if (!condition)
+                    throw std::runtime_error("UI keyboard test failed");
+            };
+            ui.handle({Key::down, {}, false, false});
+            check(ui.selected == 1);
+            check(ui.handle({Key::enter, {}, false, false}) == Action::open);
+            check(ui.page == Page::chat);
             ui.handle({Key::text, "中文 input!", false, false});
-            check(ui.draft == "中文 input!"); ui.handle({Key::backspace, {}, false, false}); check(ui.draft == "中文 input");
+            check(ui.draft == "中文 input!");
+            ui.handle({Key::backspace, {}, false, false});
+            check(ui.draft == "中文 input");
             check(ui.handle({Key::enter, {}, false, false}) == Action::send);
-            ui.uncertain = true; check(ui.handle({Key::enter, {}, false, false}) == Action::none); ui.uncertain = false;
-            ui.handle({Key::escape, {}, false, false}); ui.handle({Key::tab, {}, false, false}); check(ui.page == Page::projects);
-            ui.handle({Key::down, {}, false, false}); ui.handle({Key::down, {}, false, false});
-            ui.handle({Key::enter, {}, false, false}); check(ui.project_filter == "project_demo"); check(ui.visible_threads().size() == 2);
+            ui.busy = false; // A background read must not unlock an outstanding send.
+            check(ui.handle({Key::enter, {}, false, false}) == Action::none);
+            auto sent_text = ui.draft;
+            ui.complete_send(ui.current.id, sent_text, true);
+            check(ui.draft == sent_text && ui.uncertain);
+            check(ui.handle({Key::enter, {}, false, false}) == Action::none);
+            ui.reconcile_send(ui.current.id, false);
+            check(ui.draft.empty() && !ui.uncertain);
+            ui.handle({Key::escape, {}, false, false});
+            ui.handle({Key::tab, {}, false, false});
+            check(ui.page == Page::projects);
+            ui.handle({Key::down, {}, false, false});
+            ui.handle({Key::down, {}, false, false});
+            ui.handle({Key::enter, {}, false, false});
+            check(ui.project_filter == "project_demo");
+            check(ui.visible_threads().size() == 2);
+            auto shared_thread = ui.list.threads[0];
+            ui.select_thread(shared_thread);
+            ui.draft = "private unsent draft";
+            ui.handle({Key::escape, {}, false, false});
+            ui.reset_account();
+            check(ui.project_filter.empty() && !ui.submitting && !ui.voice_pending);
+            ui.select_thread(shared_thread);
+            check(ui.draft.empty());
+            ui.busy = false;
+            check(ui.handle({Key::record, {}, false, false}) == Action::voice);
+            ui.handle({Key::escape, {}, false, false});
+            check(ui.page == Page::chat && ui.recording);
+            ui.busy = false;
+            check(ui.handle({Key::record, {}, false, false}) == Action::none);
+            ui.recording = ui.voice_working = false;
+            ui.voice_pending = true;
+            ui.handle({Key::workspace, {}, false, false});
+            check(ui.page == Page::chat);
+            ui.voice_pending = false;
+            auto other_thread = shared_thread;
+            other_thread.id = "another_thread";
+            ui.select_thread(other_thread);
+            ui.append_dictation(shared_thread.id, "speech belongs to original");
+            check(ui.draft.empty());
+            ui.select_thread(shared_thread);
+            check(ui.draft == "speech belongs to original");
+            ui.reset_account();
             ui.demo("chat");
         }
         auto last = std::chrono::steady_clock::now();
@@ -349,41 +657,78 @@ int main(int argc, char** argv) {
         bool dirty = true, running = true;
         while (running && !interrupted) {
             auto now = std::chrono::steady_clock::now();
-            lv_tick_inc(static_cast<std::uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count())); last = now;
-            if (engine && engine->drain(ui)) dirty = true;
-            for (const auto& input : keyboard.poll()) {
-                if (ui.recording && input.key == Key::escape) {
-                    if (engine) { ui.busy = true; engine->cancel_voice(); }
-                    dirty = true; continue;
+            lv_tick_inc(static_cast<std::uint32_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count()));
+            last = now;
+            if (engine && engine->drain(ui))
+                dirty = true;
+            for (const auto &input : keyboard ? keyboard->poll() : std::vector<Input>{}) {
+                if ((ui.recording || ui.voice_pending) && input.key == Key::escape) {
+                    if (engine) {
+                        ui.busy = true;
+                        engine->cancel_voice();
+                    }
+                    dirty = true;
+                    continue;
                 }
+                bool finishing_voice = ui.recording || ui.voice_pending;
                 auto action = ui.handle(input);
                 dirty = true;
-                if (action == Action::quit) { running = false; break; }
-                if (!engine) continue;
-                if (action != Action::none) ui.busy = true;
+                if (action == Action::quit) {
+                    running = false;
+                    break;
+                }
+                if (!engine)
+                    continue;
+                if (action != Action::none)
+                    ui.busy = true;
                 switch (action) {
-                case Action::login: engine->login(); break;
-                case Action::configure: engine->configure(ui.draft); break;
-                case Action::refresh: engine->refresh(); engine->refresh_history(); break;
-                case Action::open: engine->open(ui.current); break;
-                case Action::send: engine->send(ui.current, ui.draft); break;
-                case Action::voice: engine->voice(ui.recording); break;
-                case Action::logout: engine->logout(false); break;
-                case Action::switch_workspace: engine->logout(true); break;
-                default: break;
+                case Action::login:
+                    engine->login();
+                    break;
+                case Action::configure:
+                    engine->configure(ui.draft);
+                    break;
+                case Action::refresh:
+                    engine->refresh();
+                    engine->refresh_history();
+                    break;
+                case Action::open:
+                    engine->open(ui.current);
+                    break;
+                case Action::send:
+                    engine->send(ui.current, ui.draft);
+                    break;
+                case Action::voice:
+                    engine->voice(finishing_voice, ui.current.id);
+                    break;
+                case Action::logout:
+                    engine->logout(false);
+                    break;
+                case Action::switch_workspace:
+                    engine->logout(true);
+                    break;
+                default:
+                    break;
                 }
             }
-            if (dirty) { ui.render(); dirty = false; }
-            lv_timer_handler(); display.present();
+            if (dirty) {
+                ui.render();
+                dirty = false;
+            }
+            lv_timer_handler();
+            display.present();
             if (!screenshot.empty() && now - start > std::chrono::milliseconds(600)) {
-                display.screenshot(screenshot); running = false;
+                display.screenshot(screenshot);
+                running = false;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         engine.reset();
         return 0;
-    } catch (const std::exception&) {
-        std::cerr << "Okou Zero could not start. Check configuration and display/input permissions.\n";
+    } catch (const std::exception &) {
+        std::cerr
+            << "Okou Zero could not start. Check configuration and display/input permissions.\n";
         return 1;
     }
 }

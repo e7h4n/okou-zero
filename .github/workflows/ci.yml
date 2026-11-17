@@ -1,7 +1,7 @@
 name: Build and test
 on:
   push:
-    branches: [main, 'feat/**', 'fix/**']
+    branches: [main]
     tags: ['v*']
   pull_request:
 permissions:
@@ -21,11 +21,12 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk
+          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk clang-format
       - name: Check repository hygiene
         run: |
           git diff --check
           python3 scripts/check_repository.py
+          clang-format --dry-run --Werror include/okou/*.hpp src/*.cpp tests/*.cpp
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
       - name: Build
@@ -67,14 +68,8 @@ jobs:
           dpkg-deb --info okou-zero_*_arm64.deb
           dpkg-deb --contents okou-zero_*_arm64.deb
           sha256sum okou-zero_*_arm64.deb > SHA256SUMS
-      - name: Installation and removal smoke test
-        run: |
-          sudo apt-get install -y ./build/okou-zero_*_arm64.deb
-          /usr/bin/okou-zero --version
-          test -f /usr/share/APPLaunch/applications/okou-zero.desktop
-          test -f /usr/share/doc/okou-zero/LICENSE
-          sudo apt-get remove -y okou-zero
-          test ! -e /usr/bin/okou-zero
+      - name: Installation, packaged UI and removal smoke test
+        run: bash scripts/ci-package-smoke.sh ./build/okou-zero_*_arm64.deb build
       - name: Publish package artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -82,5 +77,6 @@ jobs:
           path: |
             build/okou-zero_*_arm64.deb
             build/SHA256SUMS
+            build/installed-headless.ppm
           if-no-files-found: error
           retention-days: 30

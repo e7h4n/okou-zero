@@ -28,7 +28,7 @@ Each call builds a fresh validated baseline, so there is no persistent cursor/ca
 - Follow `GET /api/chat-threads/<id>/event-rows?sinceSeqId=N&limit=50[&sinceEventId=UUID]`. Positive sequence cursors always carry the matching event ID; zero cursors omit it. Validate requested thread identity, positive strictly increasing sequences, unique IDs, the final page cursor pair, page size, and nonempty progress on `hasMore:true`.
 - A fresh baseline gets one extra confirming tail read after exhaustion. A 410 permits at most one baseline replacement. A second expiration, malformed snapshot/page or an exhausted 8,192-event bound fails closed.
 - At most the latest 200 raw-row presentation candidates are retained. Each text is capped to 32 KiB without splitting UTF-8; user documents retain at most 128 text/unsupported-marker parts and no attachment/tool metadata. Payload fields irrelevant to display are discarded. HTTP bodies are separately capped in `Http`; the implementation is **not streaming JSON/NDJSON over the network**. Oversized production histories may therefore require Okou Web.
-- `input.*` text parts render as user text. Nontext parts show safe Web-review guidance. `output.message` renders assistant text. Structured-looking assistant content is withheld entirely to avoid displaying tool/approval secrets. `output.error` gets a generic Web-review error, not provider diagnostics. Tool/usage details are not displayed. Unsupported action/approval/permission event types display review guidance and have no execution path.
+- `input.*` text parts render as user text. Nontext parts show safe Web-review guidance. `output.message.payload.content` is canonically a plain Markdown string (verified against `ChatEventProjection.swift` and `chat-event-rows.test.ts`), not a mandatory JSON-block envelope. Markdown links, lists and ordinary JSON/code answers remain text. For compatibility, typed JSON text blocks (`type:text,text`) and assistant/message envelopes extract only allowlisted text; unknown typed blocks, tool/action/approval/permission objects are replaced by safe review guidance and their arguments are never rendered. Plain action links additionally show Web-review guidance. `output.error` gets a generic Web-review error, not provider diagnostics. Tool/usage details are not displayed. Unsupported action/approval/permission event types display review guidance and have no execution path.
 - `control.revoke.revokesEventId` removes the matching retained message. The `run.completed`, `run.failed` and `run.cancelled` markers affect only messages with the **same nonempty runId**; unmatched markers cannot establish a result. Window eviction can remove evidence, in which case uncertainty is retained rather than inferred from indicators.
 
 ## Read watermark
@@ -46,7 +46,7 @@ Sending is explicit and separate from dictation. A metadata preflight `GET /api/
   "prompt": "editable user text",
   "clientEventId": "stable UUID v4",
   "chatThreadSortEventId": "stable UUID v4",
-  "userMessage": {"parts": [{"type": "text", "text": "editable user text"}]},
+  "userMessage": {"version": 1, "parts": [{"type": "text", "text": "editable user text"}]},
   "hasTextContent": true,
   "computerUseHostId": null,
   "cloudBrowserEnabled": false
@@ -77,7 +77,7 @@ On restart or selection, call `history(thread)` and then `has_pending_send(threa
 
 ## Local verification
 
-`tests/client_test.cpp` is a standalone throwing-check executable with a local loopback HTTP server, actual `Http` requests and real WAV encoding. It verifies canonical paths/bodies, signed query preservation, bearer/client-header isolation, list tail/metadata-only reads, history tail/revocation, malformed identity/order/cursor/progress, bounded 410 recovery, matching-run terminal status, safe structured-action presentation, uncertain send identity persistence and restart reconciliation, absence-not-retry behavior, 400/409 policy, multipart JSON and WAV bytes, quota gating, 204, polish, mark-read, complete TokenRequest, unsafe storage URLs and secure UUID shape.
+`tests/client_test.cpp` is a standalone throwing-check executable with a local loopback HTTP server, actual `Http` requests and real WAV encoding. It verifies canonical paths/bodies, signed query preservation, bearer/client-header isolation, list tail/metadata-only reads, history tail/revocation, malformed identity/order/cursor/progress, bounded 410 recovery, matching-run terminal status, canonical Markdown/ordinary-JSON preservation and safe text-block/action presentation, wrong success-response identity, matching input followed by an invalid cursor not clearing pending, mute preservation, uncertain send identity persistence and restart reconciliation, absence-not-retry behavior, 400/409 policy, multipart JSON and WAV bytes, quota gating, 204, polish, mark-read, complete TokenRequest, unsafe storage URLs and secure UUID shape.
 
 Example standalone build from repository root (Linux development packages required):
 

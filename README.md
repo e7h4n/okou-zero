@@ -53,7 +53,7 @@ On the device, after downloading and verifying the CI artifact:
 
 ```sh
 sha256sum -c SHA256SUMS
-sudo apt-get install ./okou-zero_0.1.0_arm64.deb
+sudo apt-get install ./okou-zero_0.2.0_arm64.deb
 ```
 
 The package adds an `Okou` entry in `/usr/share/APPLaunch/applications`. Start it
@@ -76,8 +76,8 @@ directory with the file mode 0600. No client secret belongs in this file.
 | Enter in composer | Explicitly submit text |
 | Shift+Enter | Insert a newline |
 | Backspace | Delete one UTF-8 code point |
-| Ctrl+R | Start/finish dictation |
-| Esc while recording | Discard recording |
+| Ctrl+R | Start/finish dictation, or explicitly retry retained voice work |
+| Esc while recording/recovering | Discard recording and retained voice work |
 | Esc | Back/menu |
 | Ctrl+W | Workspace/sign-out menu |
 | Ctrl+L | Refresh authoritative state |
@@ -93,13 +93,18 @@ you to `app.okou.ai`; this client never approves them implicitly.
 - The list shows at most 128 recent visible threads and 128 projects. Conversation
   state retains a bounded recent window; oversized archives fail explicitly rather
   than exhausting device memory. See [protocol notes](docs/protocol.md).
-- Typed drafts and audio are local sensitive data; Unix file permissions are not
+- Typed drafts and recoverable audio remain in process memory, not on disk, and
+  are cleared on account transition. Voice failures retain bounded in-memory
+  progress for explicit retry; exiting/crashing loses that recovery state.
+  Tokens and pending-send identities use private files. Unix permissions are not
   protection against root or theft of an unencrypted SD card.
 - A successful HTTP submission means accepted, not run completion. An uncertain
   submission stays blocked until its stable event identity is found in durable
   history. Never delete its record and resend without checking the web conversation.
 - The framebuffer/keyboard and actual ES8389 microphone require physical acceptance.
   Unit tests do not certify input routing, microphone quality or device memory.
+- Version 0.2.0 supersedes the separately accepted 0.1.0 Hello World baseline;
+  [its historical acceptance record](docs/hello-world-acceptance.md) is preserved.
 - See [design and API dependencies](docs/design-review.md),
   [realtime behavior](docs/realtime.md), and [third-party licenses](THIRD_PARTY_NOTICES.md).
 

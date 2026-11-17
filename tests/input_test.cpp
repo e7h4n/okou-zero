@@ -6,7 +6,10 @@
 int main() {
     using namespace okou;
     try {
-        auto check = [](bool condition) { if (!condition) throw std::runtime_error("Keyboard mapping failed"); };
+        auto check = [](bool condition) {
+            if (!condition)
+                throw std::runtime_error("Keyboard mapping failed");
+        };
         check(map_key(KEY_A, false, false, false).text == "a");
         check(map_key(KEY_A, true, false, false).text == "A");
         check(map_key(KEY_A, false, true, false).text == "A");
@@ -21,11 +24,18 @@ int main() {
         check(map_key(KEY_UP, false, false, false).key == Key::up);
         check(map_key(KEY_F12, false, false, false).key == Key::none);
         std::string text = "a中🙂";
-        erase_utf8(text); check(text == "a中");
-        erase_utf8(text); check(text == "a");
-        erase_utf8(text); check(text.empty());
-        erase_utf8(text); check(text.empty());
+        erase_utf8(text);
+        check(text == "a中");
+        erase_utf8(text);
+        check(text == "a");
+        erase_utf8(text);
+        check(text.empty());
+        erase_utf8(text);
+        check(text.empty());
         std::cout << "Keyboard and UTF-8 tests passed\n";
         return 0;
-    } catch (const std::exception& ex) { std::cerr << ex.what() << '\n'; return 1; }
+    } catch (const std::exception &ex) {
+        std::cerr << ex.what() << '\n';
+        return 1;
+    }
 }

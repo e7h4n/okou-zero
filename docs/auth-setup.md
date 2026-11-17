@@ -61,6 +61,14 @@ Environment overrides JSON, including explicitly empty values:
 
 Config and token files must be regular files owned by the current effective user, with no group/other permissions and only one hard link. The containing directory must be user-owned with no group/other permissions (use 0700). Symlink traversal, including directory symlinks, is rejected. Files are bounded to 1 MiB. Saves create a 0600 temporary file in the destination directory, write/fsync, atomically rename, then fsync the directory. This provides crash-safe local generation replacement, not encryption at rest or protection from root/the same user; use full-disk encryption for a lost device. No interprocess token-refresh locking is supplied: run one client per credential directory.
 
+### Credential grant binding
+
+Each token record contains a versioned `grant_binding` for `api_origin`, `oauth_resource`, the **configured** `oauth_issuer`, and the public `client_id`. API origin comparison removes trailing slashes only; resource, client ID and configured issuer are exact strings. An empty issuer means resource discovery and is distinct from an explicit issuer, even if discovery resolves to that same URL. Validated metadata's issuer is saved separately as `resolved_oauth_issuer` provenance after discovery; it does not replace the configured binding.
+
+Loading compares this binding locally **before** exposing access or refresh tokens, with no discovery or other network request. A different origin, resource, issuer or client ID using the same `data_dir` receives an empty token set and must authorize again. Old unbound records and incomplete/unknown bindings also require a fresh device grant: they are never automatically migrated or rebound. A rejected record is left untouched until a new login replaces it or logout removes it. Refresh/save preserves the configured binding. Changing scopes alone is not a grant-binding change; reauthorize when requesting additional permissions.
+
+Use a separate `data_dir` per configuration if you need to retain multiple grants; the directory still holds only one token generation. This prevents accidental cross-configuration reuse, not malicious changes to both configuration and credential files by the same OS user. An unchanged discovery configuration is not revalidated against live metadata at startup; metadata is fetched when beginning or refreshing a grant.
+
 ## Device and token lifecycle
 
 `begin()` returns a private `device_code`, public user code and verification URI(s). Show only the user code and verification links, never the device code or tokens. Main owns cancellation and scheduling: wait at least `interval` before **each** poll, increase it by at least five seconds on `slow_down`, stop at expiry, denial or cancellation, and avoid overlapping polls. `poll()` returns `pending`, `slow_down`, `authorized`, `denied`, or `expired`; other provider errors become sanitized errors without `error_description`.
