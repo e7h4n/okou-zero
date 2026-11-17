@@ -92,6 +92,10 @@ for filename in sys.argv[1:]:
         raise SystemExit(f'{filename}: blank native headless framebuffer render')
     print(f'{filename}: valid, nonblank installed 320x170 render')
 PY
+# Disposable host only: exercise an actual signed dpkg installation using an
+# ephemeral TEST key and fixture, then reject tampering/reinstall/downgrade.
+# This never accesses a production signing secret or a release endpoint.
+sudo env OKOU_ZERO_DISPOSABLE_UPDATE_TEST=1 /usr/bin/python3 scripts/test-root-update.py "$package"
 sudo apt-get remove -y okou-zero
 installation_attempted=false
 test ! -e /usr/bin/okou-zero
