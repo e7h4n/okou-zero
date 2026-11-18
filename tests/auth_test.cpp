@@ -429,6 +429,7 @@ void tests() {
              {200, token("org_test", "")},
              {503, {{"error", "PRIVATE"}}}});
         auto c = config(f, root + "/credentials");
+        c.scopes = "openid profile offline_access user:org:read";
         okou::OAuth auth(c, http);
         auto d = auth.begin();
         CHECK(d.interval == 7);
@@ -479,8 +480,26 @@ void tests() {
         CHECK(auth.load().access_token.empty());
         auto requests = f.requests();
         CHECK(requests.size() == 10);
-        CHECK(requests[1].find("client_id=public-test") != std::string::npos);
-        CHECK(requests[1].find("resource=https%3A%2F%2Fapi.okou.ai%2Fmcp") != std::string::npos);
+        auto form_body = [&](std::size_t index, const std::string &path) {
+            const auto &request = requests[index];
+            CHECK(request.rfind("POST " + path + " HTTP/", 0) == 0);
+            CHECK(request.find("\r\nContent-Type: application/x-www-form-urlencoded\r\n") !=
+                  std::string::npos);
+            auto separator = request.find("\r\n\r\n");
+            CHECK(separator != std::string::npos);
+            return request.substr(separator + 4);
+        };
+        CHECK(form_body(1, "/device") ==
+              "client_id=public-test&scope=openid%20profile%20offline_access%20user%3Aorg%3Aread");
+        for (std::size_t i = 2; i <= 6; ++i) {
+            CHECK(form_body(i, "/token") ==
+                  "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+                  "&device_code=private-device&client_id=public-test");
+        }
+        CHECK(form_body(7, "/token") ==
+              "grant_type=refresh_token&refresh_token=refresh-old&client_id=public-test");
+        CHECK(form_body(8, "/token") ==
+              "grant_type=refresh_token&refresh_token=refresh-rotated&client_id=public-test");
         for (const auto &request : requests) {
             CHECK(request.find("client_secret") == std::string::npos);
             CHECK(request.find("organization_id") == std::string::npos);

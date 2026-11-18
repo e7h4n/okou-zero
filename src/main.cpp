@@ -261,13 +261,17 @@ class Engine {
             while (!stopping_ && std::chrono::steady_clock::now() < deadline) {
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
-                    if (cv_.wait_for(lock, std::chrono::seconds(interval),
-                                     [this] { return stopping_.load(); }))
+                    auto next_poll =
+                        std::chrono::steady_clock::now() + std::chrono::seconds(interval);
+                    if (cv_.wait_until(lock, std::min(next_poll, deadline),
+                                       [this] { return stopping_.load(); }))
                         return;
                 }
                 PollResult result;
                 {
                     std::lock_guard<std::mutex> guard(s->io);
+                    if (std::chrono::steady_clock::now() >= deadline)
+                        break;
                     result = s->auth.poll(code);
                 }
                 if (result.state == PollState::pending)

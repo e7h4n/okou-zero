@@ -232,9 +232,7 @@ DeviceCode OAuth::begin() {
     HttpResponse response;
     try {
         response = post(http_, str(metadata_, "device_authorization_endpoint", true),
-                        {{"client_id", config_.oauth_client_id},
-                         {"scope", config_.scopes},
-                         {"resource", config_.oauth_resource}});
+                        {{"client_id", config_.oauth_client_id}, {"scope", config_.scopes}});
         auto j = checked(response);
         DeviceCode c;
         c.device_code = str(j, "device_code", true);
@@ -244,7 +242,7 @@ DeviceCode OAuth::begin() {
         secure_url(c.verification_uri);
         if (!c.verification_uri_complete.empty())
             secure_url(c.verification_uri_complete);
-        auto interval = number(j, "interval", 5), expiry = number(j, "expires_in", 600);
+        auto interval = number(j, "interval", 5), expiry = number(j, "expires_in", 0);
         if (interval < 1 || interval > 3600 || expiry < 1 || expiry > 86400)
             throw auth_error("Invalid OAuth device timing");
         c.interval = static_cast<int>(interval);
@@ -265,8 +263,7 @@ PollResult OAuth::poll(const DeviceCode &code) {
         response = post(http_, str(metadata_, "token_endpoint", true),
                         {{"grant_type", "urn:ietf:params:oauth:grant-type:device_code"},
                          {"device_code", code.device_code},
-                         {"client_id", config_.oauth_client_id},
-                         {"resource", config_.oauth_resource}});
+                         {"client_id", config_.oauth_client_id}});
         const auto &r = response;
         auto j = r.json();
         if (!j.is_object())
@@ -358,8 +355,7 @@ Tokens OAuth::refresh(const Tokens &previous) {
         response = post(http_, str(metadata_, "token_endpoint", true),
                         {{"grant_type", "refresh_token"},
                          {"refresh_token", previous.refresh_token},
-                         {"client_id", config_.oauth_client_id},
-                         {"resource", config_.oauth_resource}});
+                         {"client_id", config_.oauth_client_id}});
         auto body = checked(response);
         stage = diagnostics::Stage::token_validation;
         return parse_tokens(body, previous);
