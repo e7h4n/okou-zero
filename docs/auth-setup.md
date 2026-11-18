@@ -93,6 +93,20 @@ Logout removes/fsyncs local credentials **before** best-effort revocation. Cance
 - HTTP 2xx/3xx/4xx return `HttpResponse`; **every caller must check status** before interpreting a successful API response. OAuth reads the standard 400 error field. Network/cancellation/response-bound errors and 5xx throw sanitized `HttpError`. Non-read requests interrupted after transport starts, or receiving 5xx, are conservatively `uncertain=true`; preflight cancellation is not uncertain. No request is automatically replayed.
 - Errors contain only fixed descriptions/status, never request URL, body, token, provider error description or raw response. Debug/verbose curl logging is not enabled.
 
+### Sanitized failure diagnostics
+
+The client writes bounded, single-line structured failure records to **stderr**. When launched by the standard launcher service, these use the launcher's existing journal stream; the client creates no log files, telemetry service, network request or new retention policy. For example:
+
+```sh
+journalctl --user -u APPLaunch.service --since '10 minutes ago' --no-pager
+```
+
+Records identify the failed local operation, HTTP status and numeric libcurl error code when available, send uncertainty, and an allowlisted OAuth protocol error. Unknown provider codes and arbitrary exception text become fixed classifications rather than being copied into logs. HTTP status zero means no usable HTTP status was available, not that the provider returned a status of zero. A libcurl code is a transport diagnostic, not proof of a specific server-side cause.
+
+Never enable verbose curl or request/response dumps to investigate login. These diagnostics exclude URLs and query strings, request/response bodies, headers, provider descriptions, tokens, device/user codes, verification links, client/user/organization identifiers, messages, drafts and audio. Normal authorization-pending and slow-down polling stays quiet. Logging does not change authorization, polling intervals, validation, refresh barriers or uncertain-send handling, and never retries an operation. A stage-specific record and an application-boundary record can describe the same exception; two such records do not imply two network requests.
+
+Older installed versions cannot recover details they never recorded. After an approved diagnostic build is installed, reproduce the failure only with explicit operator approval; adding diagnostics or opening a PR does not authorize another login, device installation or service change.
+
 ### Offline fixtures only
 
 `OKOU_ZERO_TEST_ALLOW_LOOPBACK_HTTP=1` explicitly allows HTTP **only** to numeric `127.0.0.1` / `::1` fixtures (not hostname `localhost`, arbitrary hosts or redirects). `OKOU_ZERO_TEST_CA_FILE` supplies a test CA **only** for numeric-loopback HTTPS; certificate and hostname verification stay enabled. Neither setting bypasses TLS validation for public services. Keep them unset in production.

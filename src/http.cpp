@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "okou/core.hpp"
+#include "okou/diagnostics.hpp"
 #ifndef OKOU_ZERO_VERSION
 #define OKOU_ZERO_VERSION "dev"
 #endif
@@ -95,8 +96,9 @@ std::string request_id() {
     return out;
 }
 } // namespace
-HttpError::HttpError(long s, std::string message, bool u)
-    : std::runtime_error(std::move(message)), status(s), uncertain(u) {}
+HttpError::HttpError(long s, std::string message, bool u, int code, std::string_view oauth)
+    : std::runtime_error(std::move(message)), status(s), uncertain(u), curl_code(code),
+      oauth_error(diagnostics::oauth_error_code(oauth)) {}
 Json HttpResponse::json() const {
     try {
         return Json::parse(body);
@@ -261,10 +263,11 @@ HttpResponse Http::request(const std::string &method, const std::string &url,
                              : result == CURLE_ABORTED_BY_CALLBACK ? "Request cancelled"
                              : result == CURLE_OPERATION_TIMEDOUT  ? "Request timed out"
                                                                   : "Network or TLS request failed";
-        throw HttpError(transfer.response.status, reason, writing);
+        throw HttpError(transfer.response.status, reason, writing, static_cast<int>(result));
     }
     if (transfer.response.status >= 500)
-        throw HttpError(transfer.response.status, "Server request failed", writing);
+        throw HttpError(transfer.response.status, "Server request failed", writing, 0,
+                        diagnostics::response_oauth_error(transfer.response.body));
     // HTTP 4xx is returned so OAuth can inspect the standard error field. Callers
     // must check status before interpreting success payloads. No request is retried.
     return std::move(transfer.response);

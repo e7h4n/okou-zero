@@ -37,7 +37,7 @@ if(NOT ixwebsocket_POPULATED)
   add_subdirectory(${ixwebsocket_SOURCE_DIR} ${ixwebsocket_BINARY_DIR} EXCLUDE_FROM_ALL)
 endif()
 
-add_library(okou_core STATIC src/http.cpp src/auth.cpp src/config.cpp src/client.cpp src/audio.cpp src/realtime.cpp src/dictation.cpp src/update_process.cpp)
+add_library(okou_core STATIC src/diagnostics.cpp src/http.cpp src/auth.cpp src/config.cpp src/client.cpp src/audio.cpp src/realtime.cpp src/dictation.cpp src/update_process.cpp)
 target_include_directories(okou_core PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/generated" PRIVATE src)
 target_compile_definitions(okou_core PUBLIC OKOU_ZERO_VERSION="${PROJECT_VERSION}")
 target_link_libraries(okou_core PUBLIC nlohmann_json::nlohmann_json Threads::Threads
@@ -71,7 +71,7 @@ endif()
 
 if(OKOU_ZERO_TESTS)
   enable_testing()
-  foreach(name auth http client audio realtime dictation config)
+  foreach(name auth http client audio realtime dictation config diagnostics)
     add_executable(${name}_test tests/${name}_test.cpp)
     target_link_libraries(${name}_test PRIVATE okou_core)
     target_compile_options(${name}_test PRIVATE -Wall -Wextra -Wpedantic)

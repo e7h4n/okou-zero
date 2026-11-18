@@ -1,3 +1,4 @@
+#include "okou/diagnostics.hpp"
 #include "okou/dictation.hpp"
 #include "okou/ui.hpp"
 #include "update_process.hpp"
@@ -68,6 +69,7 @@ class Engine {
         }
     }
     void error(const std::exception &ex) {
+        diagnostics::log_error(diagnostics::Stage::application, ex);
         const auto *http = dynamic_cast<const HttpError *>(&ex);
         long status = http ? http->status : 0;
         std::string text = status == 401   ? "Sign-in expired; sign in again"
@@ -785,7 +787,8 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Update installed; reopen Okou from the launcher");
         }
         return 0;
-    } catch (const std::exception &) {
+    } catch (const std::exception &error) {
+        diagnostics::log_error(diagnostics::Stage::startup, error);
         std::cerr
             << "Okou Zero could not start. Check configuration and display/input permissions.\n";
         return 1;

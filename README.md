@@ -79,6 +79,8 @@ is `https://api.okou.ai/mcp`, and issuer is discovered via metadata. The bundled
 public client must belong to the production Clerk instance. Signed stable updates
 remain enabled. See [bundled defaults](docs/auth-setup.md#bundled-defaults) for
 configuration override behavior and fresh authorization after switching origins.
+Client failures emit [sanitized stderr diagnostics](docs/auth-setup.md#sanitized-failure-diagnostics)
+for the launcher's existing journal, without credentials or request/response dumps.
 
 ## Signed updates
 

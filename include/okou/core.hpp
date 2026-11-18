@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace okou {
@@ -42,7 +43,10 @@ class HttpError : public std::runtime_error {
   public:
     long status;
     bool uncertain;
-    HttpError(long status, std::string message, bool uncertain = false);
+    int curl_code;
+    std::string oauth_error;
+    HttpError(long status, std::string message, bool uncertain = false, int curl_code = 0,
+              std::string_view oauth_error = "none");
 };
 class Http {
   public:
