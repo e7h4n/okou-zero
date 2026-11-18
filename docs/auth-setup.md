@@ -23,11 +23,11 @@ Sources checked 2026-11-17:
 
 ## Bundled defaults
 
-The standard package currently targets the companion backend PR Preview at `https://pr-48263-api.vm6.ai`. The resource is this origin plus `/mcp`; issuer is discovered from its OAuth resource metadata. These defaults live in code, so no additional GitHub API/issuer/resource Variables are needed. Only `OKOU_ZERO_OAUTH_CLIENT_ID` is injected by CI as a CMake string. It is public, not a secret. Main/tag builds fail closed if that Variable is missing; local/fork offline builds may leave it empty and show the setup screen.
+Starting with 0.2.5, the standard package targets the production API at `https://api.okou.ai`. The resource is this origin plus `/mcp`; issuer is discovered from its OAuth resource metadata. These defaults live in code, so no additional GitHub API/issuer/resource Variables are needed. Only `OKOU_ZERO_OAUTH_CLIENT_ID` is injected by CI as a CMake string. It is public, not a secret. Main/tag builds fail closed if that Variable is missing; local/fork offline builds may leave it empty and show the setup screen.
 
 Configure locally with `cmake -S . -B build -DOKOU_ZERO_OAUTH_CLIENT_ID=YOUR_PUBLIC_CLIENT_ID`. Runtime environment variables still override user configuration, which overrides bundled defaults. Existing user configuration is preserved, not silently rewritten. Existing grants remain bound to API/issuer/resource/client ID and require fresh authorization when those change. There is no special test storage directory, test UI label, or alternate updater channel; normal signed stable updates remain enabled.
 
-Preview is the current service target, **not** proof that authentication works end to end. Its access protection still requires approved native ingress access; the Clerk application must allow the requested Project/Voice scopes. No bypass credential is embedded. Keep this Preview deployed while clients target it. Moving to production later requires a deliberate default-origin change and fresh authorization; a normal client ID is not a way to bypass Preview protection.
+The bundled public client must be provisioned in production Clerk (`https://clerk.okou.ai`) and allow the requested Project/Voice scopes. No Preview bypass credential is embedded or needed. The former Preview grant is not reused: changing the origin/resource/client binding requires fresh device authorization. Existing explicit user configuration and environment overrides remain authoritative; operators must deliberately update any old Preview override. Production metadata availability and configured scope strings are not proof of end-to-end login or voice acceptance.
 
 ## Configuration
 

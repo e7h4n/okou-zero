@@ -25,7 +25,7 @@ int main() {
     auto c = okou::load_config();
     check(c.oauth_client_id == okou::build::oauth_client_id);
     check(c.oauth_issuer.empty()); // Resource metadata remains authoritative for issuer discovery.
-    check(c.api_origin == "https://pr-48263-api.vm6.ai");
+    check(c.api_origin == "https://api.okou.ai");
     check(c.oauth_resource == c.api_origin + "/mcp");
     check(c.data_dir == root + "/data/okou-zero");
     c.oauth_client_id = "user-public-client";

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(okou_zero VERSION 0.2.4 LANGUAGES C CXX)
+project(okou_zero VERSION 0.2.5 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -9,8 +9,8 @@ set(OKOU_ZERO_OAUTH_CLIENT_ID "" CACHE STRING "Public OAuth client ID (never a s
 if(NOT OKOU_ZERO_OAUTH_CLIENT_ID MATCHES "^[A-Za-z0-9_-]*$")
   message(FATAL_ERROR "Invalid public OAuth client ID")
 endif()
-# One standard package, currently targeting the companion backend PR Preview.
-set(OKOU_ZERO_API_ORIGIN "https://pr-48263-api.vm6.ai")
+# One standard package targeting the production API.
+set(OKOU_ZERO_API_ORIGIN "https://api.okou.ai")
 configure_file(config/build_config.hpp.in generated/okou/build_config.hpp @ONLY)
 include(FetchContent)
 find_package(Threads REQUIRED)
