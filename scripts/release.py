@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare a signed arm64 update and create (never overwrite) a stable release.
 
-Only trusted tag CI should supply OKOU_UPDATE_SIGNING_KEY. No network requests
-are made until all local package, tag, and signature checks have passed.
+Only trusted main CI should supply OKOU_UPDATE_SIGNING_KEY. No publication is
+attempted until all local package, commit, and signature checks have passed.
 """
 
 import argparse
@@ -36,16 +36,47 @@ def package_field(package, field):
     ).stdout.strip()
 
 
+def git_output(*args):
+    return run(["git", *args], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+
+
+def next_version():
+    tag = git_output(
+        "describe", "--tags", "--first-parent", "--abbrev=0",
+        "--match", "v[0-9]*.[0-9]*.[0-9]*", "HEAD",
+    )
+    parts = re.fullmatch("v" + SEMVER, tag)
+    if parts is None:
+        raise ValueError("The previous release tag is not stable SemVer")
+    major, minor, patch = map(int, parts.groups())
+    if git_output("rev-parse", f"{tag}^{{commit}}") != git_output("rev-parse", "HEAD"):
+        patch += 1
+    return f"{major}.{minor}.{patch}"
+
+
+def release_exists(tag):
+    result = run(
+        ["gh", "release", "view", tag, "--repo", REPOSITORY,
+         "--json", "isDraft,isPrerelease,assets"],
+        check=False, capture_output=True, text=True,
+    )
+    if result.returncode:
+        return False
+    release = json.loads(result.stdout)
+    expected = {
+        "manifest.json", "manifest.sig", "SHA256SUMS",
+        f"okou-zero_{tag[1:]}_arm64.deb",
+    }
+    if (release["isDraft"] or release["isPrerelease"] or
+            not expected <= {asset["name"] for asset in release["assets"]}):
+        raise ValueError("An incomplete or non-stable release already exists for this tag")
+    return True
+
+
 def validate_package(tag, package):
     if re.fullmatch("v" + SEMVER, tag) is None:
         raise ValueError("Release tag must be vMAJOR.MINOR.PATCH (stable SemVer)")
     version = tag[1:]
-    cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-    declared = re.search(
-        r"project\(\s*okou_zero\s+VERSION\s+([^\s)]+)", cmake, re.IGNORECASE
-    )
-    if declared is None or declared.group(1) != version:
-        raise ValueError("Release tag does not match the CMake project version")
     if not package.is_file() or package.is_symlink():
         raise ValueError("Expected a regular Debian package")
     for field, expected in (
@@ -116,9 +147,11 @@ def prepare(tag, package, output_dir, private_key):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tag", required=True)
-    parser.add_argument("--package", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--next-version", action="store_true")
+    parser.add_argument("--tag")
+    parser.add_argument("--commit")
+    parser.add_argument("--package", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
         "--prepare-only", action="store_true",
         help="validate, sign, and verify locally without publishing",
@@ -126,13 +159,42 @@ def main(argv=None):
     args = parser.parse_args(argv)
     private_key = os.environ.pop("OKOU_UPDATE_SIGNING_KEY", "")
     try:
+        if args.next_version:
+            print(next_version())
+            return 0
+        if args.tag is None or args.package is None or args.output_dir is None:
+            parser.error("--tag, --package, and --output-dir are required")
+        create_tag = False
+        if not args.prepare_only:
+            if args.commit != git_output("rev-parse", "HEAD") or args.tag != "v" + next_version():
+                raise ValueError("Release commit or version does not match the tested main checkout")
+            target = tuple(map(int, args.tag[1:].split(".")))
+            for tag in git_output("tag", "--list", "v*").splitlines():
+                candidate = re.fullmatch("v" + SEMVER, tag)
+                if candidate and tuple(map(int, candidate.groups())) > target:
+                    raise ValueError("A newer stable version already has a tag")
+            tag_ref = "refs/tags/" + args.tag
+            tags = git_output("tag", "--list", args.tag)
+            if tags:
+                if git_output("rev-parse", f"{tag_ref}^{{commit}}") != args.commit:
+                    raise ValueError("Release tag already belongs to another commit")
+                if release_exists(args.tag):
+                    print(f"Release {args.tag} already exists for the tested commit")
+                    return 0
+            else:
+                create_tag = True
         version, assets = prepare(
             args.tag, args.package.absolute(), args.output_dir.absolute(), private_key
         )
         private_key = ""
         if not args.prepare_only:
-            # gh release create refuses an existing release; never use upload
-            # --clobber, delete, or edit. --verify-tag forbids creating a tag.
+            # Create the ref atomically after signature verification. A
+            # conflicting ref aborts without publishing or moving any tag.
+            if create_tag:
+                run([
+                    "gh", "api", "--method", "POST", f"repos/{REPOSITORY}/git/refs",
+                    "-f", f"ref={tag_ref}", "-f", f"sha={args.commit}",
+                ], stdout=subprocess.DEVNULL)
             run([
                 "gh", "release", "create", args.tag, "--repo", REPOSITORY,
                 "--verify-tag", "--latest", "--title", f"Okou {version}",

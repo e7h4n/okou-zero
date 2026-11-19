@@ -101,11 +101,11 @@ The package installs updater modules in `/usr/lib/okou-zero`, the public key in
 only that helper with **no arguments** for the sudo group, not arbitrary commands.
 Runtime dependencies include Python 3, OpenSSL and sudo alongside native V1 dependencies.
 
-Trusted repository tag-push CI publishes only after **both** native architecture
+Trusted repository `main` CI increments the patch version and publishes only after **both** native architecture
 builds, tests and package-install/render/removal checks pass. Release metadata must
 match the configured CMake version and package. The release-only
 `OKOU_UPDATE_SIGNING_KEY` secret signs `manifest.json`; CI verifies the signature
-against the bundled public key before creating the release, which also contains
+against the bundled public key before tagging the tested commit and creating the release, which also contains
 `manifest.sig`, the arm64 `.deb` and `SHA256SUMS`. Existing releases are never
 replaced. Public CI tests mock updater network calls and never install a real update.
 
