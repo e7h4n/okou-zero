@@ -50,6 +50,7 @@ class UI {
     lv_obj_t *body_ = nullptr;
     lv_obj_t *footer_ = nullptr;
     lv_font_t *font_ = nullptr;
+    lv_font_t *detail_font_ = nullptr;
     std::unique_ptr<EmojiRenderer> emoji_;
     int history_scroll_ = 0;
     std::map<std::string, std::string> drafts_;

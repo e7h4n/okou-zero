@@ -54,8 +54,11 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
         if (std::filesystem::exists(path)) {
             font_ = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 13,
                                             LV_FREETYPE_FONT_STYLE_NORMAL);
-            if (font_)
+            if (font_) {
+                detail_font_ = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP,
+                                                       11, LV_FREETYPE_FONT_STYLE_NORMAL);
                 break;
+            }
         }
     lv_obj_set_style_text_font(root_, font_ ? font_ : LV_FONT_DEFAULT, 0);
     lv_obj_set_style_text_color(root_, lv_color_hex(ink), 0);
@@ -77,6 +80,8 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
 }
 UI::~UI() {
     lv_obj_clean(root_);
+    if (detail_font_)
+        lv_freetype_font_delete(detail_font_);
     if (font_)
         lv_freetype_font_delete(font_);
 }
@@ -124,8 +129,11 @@ lv_obj_t *UI::row(const std::string &title, const std::string &detail, int y, bo
     }
     label(box, parts.first.empty() ? parts.second : title, text_x, detail.empty() ? 5 : 0,
           280 - text_x, color, 17);
-    if (!detail.empty())
-        label(box, detail, text_x, 14, 280 - text_x, muted, 14);
+    if (!detail.empty()) {
+        auto *subtitle = label(box, detail, text_x, 14, 280 - text_x, muted, 14);
+        lv_obj_set_style_text_font(subtitle, detail_font_ ? detail_font_ : &lv_font_montserrat_12,
+                                   0);
+    }
     return box;
 }
 std::vector<std::size_t> UI::visible_threads() const {
@@ -401,8 +409,14 @@ void UI::render() {
                 if (thread.active) {
                     running_indicator(box, row_index);
                 } else if (thread.muted) {
-                    auto *icon = label(box, LV_SYMBOL_MUTE, 290, 6, 16, muted, 17);
+                    auto *icon = label(box, LV_SYMBOL_BELL, 290, 6, 16, muted, 17);
                     lv_obj_set_style_text_font(icon, &lv_font_montserrat_12, 0);
+                    static const lv_point_precise_t slash[] = {{0, 0}, {11, 11}};
+                    auto *line = lv_line_create(box);
+                    lv_line_set_points(line, slash, 2);
+                    lv_obj_set_pos(line, 291, 8);
+                    lv_obj_set_style_line_width(line, 2, 0);
+                    lv_obj_set_style_line_color(line, lv_color_hex(muted), 0);
                 } else if (thread.unread) {
                     shape(box, 294, 11, 7, 7, LV_RADIUS_CIRCLE, state_blue);
                 } else if (drafts_.count(thread.id) && !drafts_.at(thread.id).empty()) {
@@ -432,8 +446,10 @@ void UI::render() {
                 lv_obj_set_style_text_font(arrow, &lv_font_montserrat_12, 0);
             }
         }
-        label(body_, status, 8, 115, 304, muted, 11);
-        help = "Up/down   Enter open   Tab switch   Esc menu";
+        const bool request_failed = status.rfind("Could not", 0) == 0 ||
+                                    status.rfind("Sign-in expired", 0) == 0 ||
+                                    status.rfind("Access not granted", 0) == 0;
+        help = request_failed ? status : "Up/down   Enter open   Tab switch   Esc menu";
     } else {
         auto *history = lv_obj_create(body_);
         lv_obj_remove_style_all(history);
