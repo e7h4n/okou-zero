@@ -17,6 +17,7 @@ find_package(Threads REQUIRED)
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(SQLite3 REQUIRED)
 find_package(nlohmann_json 3.10 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
@@ -41,7 +42,7 @@ add_library(okou_core STATIC src/diagnostics.cpp src/http.cpp src/auth.cpp src/c
 target_include_directories(okou_core PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/generated" PRIVATE src)
 target_compile_definitions(okou_core PUBLIC OKOU_ZERO_VERSION="${PROJECT_VERSION}")
 target_link_libraries(okou_core PUBLIC nlohmann_json::nlohmann_json Threads::Threads
-  CURL::libcurl OpenSSL::Crypto ixwebsocket PkgConfig::ALSA)
+  CURL::libcurl OpenSSL::Crypto ixwebsocket PkgConfig::ALSA PRIVATE SQLite::SQLite3)
 target_compile_options(okou_core PRIVATE -Wall -Wextra -Wpedantic)
 
 set(LV_BUILD_CONF_PATH "${CMAKE_CURRENT_SOURCE_DIR}/config/lv_conf.h" CACHE PATH "" FORCE)

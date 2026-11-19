@@ -26,17 +26,26 @@ struct CurlGlobal {
 };
 struct Transfer {
     HttpResponse response;
+    std::FILE *output = nullptr;
+    std::size_t body_bytes = 0;
     std::size_t header_bytes = 0;
     bool overflow = false;
+    bool output_error = false;
 };
 std::size_t receive(char *p, std::size_t size, std::size_t n, void *arg) noexcept {
     auto &t = *static_cast<Transfer *>(arg);
     if (size && n > std::numeric_limits<std::size_t>::max() / size)
         return 0;
     auto bytes = size * n;
-    if (bytes > max_body - t.response.body.size()) {
+    if (bytes > max_body - t.body_bytes) {
         t.overflow = true;
         return 0;
+    }
+    t.body_bytes += bytes;
+    if (t.output) {
+        const auto written = std::fwrite(p, 1, bytes, t.output);
+        t.output_error = written != bytes;
+        return written;
     }
     try {
         t.response.body.append(p, bytes);
@@ -125,7 +134,7 @@ std::string Http::encode(const std::string &value) {
 HttpResponse Http::request(const std::string &method, const std::string &url,
                            const std::string &body, const std::string &bearer,
                            const std::map<std::string, std::string> &headers,
-                           const std::vector<UploadPart> &parts) {
+                           const std::vector<UploadPart> &parts, std::FILE *output) {
     static CurlGlobal global;
     if (cancelled_ && cancelled_->load())
         throw HttpError(0, "Request cancelled");
@@ -160,6 +169,7 @@ HttpResponse Http::request(const std::string &method, const std::string &url,
     if (!curl)
         throw HttpError(0, "HTTP initialization failed");
     Transfer transfer;
+    transfer.output = output;
     curl_slist *list = nullptr;
     struct ListGuard {
         curl_slist *&list;
@@ -260,6 +270,7 @@ HttpResponse Http::request(const std::string &method, const std::string &url,
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &transfer.response.status);
     if (result != CURLE_OK) {
         const char *reason = transfer.overflow                     ? "Response exceeds size limit"
+                             : transfer.output_error               ? "Cannot spool HTTP response"
                              : result == CURLE_ABORTED_BY_CALLBACK ? "Request cancelled"
                              : result == CURLE_OPERATION_TIMEDOUT  ? "Request timed out"
                                                                   : "Network or TLS request failed";

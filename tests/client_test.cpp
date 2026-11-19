@@ -295,6 +295,38 @@ void metadata_only_test() {
     check(c.indicators()["threads"][thread_id] == "unread", "independent indicator read");
     f.server.finish();
 }
+void large_list_test() {
+    Fixture f;
+    auto storage = f.server.origin() + "/storage/large-list";
+    auto rows = Json::array();
+    for (int i = 1000; i < 9000; ++i)
+        rows.push_back({{"id", id(i)},
+                        {"agentId", agent},
+                        {"sortAt", std::to_string(i)},
+                        {"title", "Thread " + std::to_string(i)},
+                        {"hidden", i == 8999}});
+    Json event = {{"id", id(11)},
+                  {"seqId", 11},
+                  {"kind", "sort_touched"},
+                  {"chatThreadId", id(1000)},
+                  {"createdAt", "9999"}};
+    f.server.start({
+        get("/api/chat-threads/snapshot",
+            {{"url", storage}, {"latestSeqId", 10}, {"latestEventId", id(10)}}),
+        [rows = std::move(rows)](const Request &r) {
+            check(r.target == "/storage/large-list", "large snapshot URL");
+            return json({{"chatThreads", rows}});
+        },
+        get("/api/chat-threads/events?sinceSeqId=10",
+            {{"events", Json::array({event})}, {"hasMore", false}}),
+        get("/api/projects", {{"projects", Json::array()}}),
+    });
+    auto result = f.client().list(false);
+    check(result.threads.size() == 128, "large workspace only loads the visible window");
+    check(result.threads[0].id == id(1000), "tail can promote a thread outside the window");
+    check(result.threads[1].id == id(8998), "hidden thread excluded before applying window");
+    f.server.finish();
+}
 void history_test() {
     Fixture f;
     auto storage = f.server.origin() + "/storage/history?sig=keep%2Bsignature";
@@ -706,6 +738,7 @@ int main() {
         ::setenv("OKOU_ZERO_TEST_ALLOW_LOOPBACK_HTTP", "1", 1);
         list_test();
         metadata_only_test();
+        large_list_test();
         history_test();
         bad_history_tests();
         send_test();
