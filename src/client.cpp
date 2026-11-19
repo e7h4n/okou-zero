@@ -250,8 +250,11 @@ class ThreadIndex {
         check(sqlite3_exec(db_.get(),
                            "PRAGMA cache_size=-512; PRAGMA journal_mode=OFF;"
                            "CREATE TABLE threads(id TEXT PRIMARY KEY, body TEXT NOT NULL,"
-                           " sort_at TEXT NOT NULL, visible INTEGER NOT NULL) WITHOUT ROWID;"
+                           " sort_at TEXT NOT NULL, visible INTEGER NOT NULL,"
+                           " project_id TEXT NOT NULL) WITHOUT ROWID;"
                            "CREATE INDEX thread_order ON threads(visible,sort_at DESC,id);"
+                           "CREATE INDEX project_order"
+                           " ON threads(project_id,visible,sort_at DESC,id);"
                            "BEGIN",
                            nullptr, nullptr, nullptr));
     }
@@ -270,17 +273,23 @@ class ThreadIndex {
     void save(const std::string &id, const Json &value, bool replace) {
         const auto json = value.dump();
         const auto sort_at = str(value, "sortAt");
+        const auto project_id = str(value, "projectId");
         const bool visible = !flag(value, "archived") && !flag(value, "hidden");
         auto stmt = statement(
-            replace ? "INSERT OR REPLACE INTO threads VALUES(?1,?2,?3,CAST(?4 AS INTEGER))"
-                    : "INSERT INTO threads VALUES(?1,?2,?3,CAST(?4 AS INTEGER))",
-            {id, json, sort_at, visible ? "1" : "0"});
+            replace ? "INSERT OR REPLACE INTO threads VALUES(?1,?2,?3,CAST(?4 AS INTEGER),?5)"
+                    : "INSERT INTO threads VALUES(?1,?2,?3,CAST(?4 AS INTEGER),?5)",
+            {id, json, sort_at, visible ? "1" : "0", project_id});
         row(stmt);
     }
-    template <typename Consume> void visible(Consume consume) {
+    template <typename Consume> void visible(const std::string &project, Consume consume) {
         const auto limit = std::to_string(max_visible);
-        auto stmt = statement(
-            "SELECT body FROM threads WHERE visible=1 ORDER BY sort_at DESC,id LIMIT ?1", {limit});
+        auto stmt = project.empty()
+                        ? statement("SELECT body FROM threads WHERE visible=1"
+                                    " ORDER BY sort_at DESC,id LIMIT ?1",
+                                    {limit})
+                        : statement("SELECT body FROM threads WHERE visible=1 AND project_id=?1"
+                                    " ORDER BY sort_at DESC,id LIMIT ?2",
+                                    {project == "~" ? "" : project, limit});
         while (row(stmt))
             consume(body(stmt));
     }
@@ -649,7 +658,7 @@ Json Client::indicators() {
     }
     return result;
 }
-ListState Client::list(bool include_indicators) {
+ListState Client::list(bool include_indicators, const std::string &project_filter) {
     ListState out;
     ThreadIndex threads;
     auto index = [&](const Json &item) {
@@ -665,7 +674,8 @@ ListState Client::list(bool include_indicators) {
                       {"sortAt", clipped(str(item, "sortAt"), 64)},
                       {"archived", flag(item, "archived")},
                       {"hidden", flag(item, "hidden")},
-                      {"muted", flag(item, "muted")}},
+                      {"muted", flag(item, "muted")},
+                      {"pinned", !str(item, "pinnedAt").empty()}},
                      false);
     };
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -720,7 +730,8 @@ ListState Client::list(bool include_indicators) {
                             continue;
                         v = {{"id", t}, {"archived", false}};
                     }
-                    if (e.contains("title"))
+                    // The wire format carries a nullable title on every event.
+                    if ((kind == "created" || kind == "renamed") && e.contains("title"))
                         v["title"] = clipped(str(e, "title"), 512);
                     for (const char *k : {"agentId", "projectId", "reassignedAgentId"})
                         if (e.contains(k)) {
@@ -739,6 +750,8 @@ ListState Client::list(bool include_indicators) {
                         v["archived"] = true;
                     if (kind == "unarchived")
                         v["archived"] = false;
+                    if (kind == "pinned" || kind == "unpinned")
+                        v["pinned"] = kind == "pinned";
                     if (kind == "created" || kind == "sort_touched")
                         v["sortAt"] = clipped(str(e, "createdAt"), 64);
                     threads.save(t, v, true);
@@ -758,13 +771,14 @@ ListState Client::list(bool include_indicators) {
         break;
     }
     auto values = include_indicators ? indicators().at("threads") : Json::object();
-    threads.visible([&](const Json &v) {
+    threads.visible(project_filter, [&](const Json &v) {
         Thread t;
         t.id = str(v, "id");
         t.title = str(v, "title");
         t.agent_id = str(v, "agentId");
         t.project_id = str(v, "projectId");
         t.muted = flag(v, "muted");
+        t.pinned = flag(v, "pinned");
         auto state = str(values, t.id.c_str());
         t.active = state == "active";
         t.unread = state == "unread" && !t.muted;

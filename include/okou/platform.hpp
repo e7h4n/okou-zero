@@ -35,6 +35,11 @@ struct Input {
 };
 Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl);
 void erase_utf8(std::string &text);
+struct BatteryStatus {
+    int percent = -1;
+    bool charging = false;
+};
+BatteryStatus read_battery_status();
 class Display {
   public:
     Display(bool desktop, const std::string &framebuffer, bool headless = false);

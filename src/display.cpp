@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 #include <fstream>
 #include <linux/fb.h>
 #include <stdexcept>
@@ -14,6 +15,25 @@
 #endif
 
 namespace okou {
+BatteryStatus read_battery_status() {
+    std::error_code error;
+    std::filesystem::directory_iterator entry("/sys/class/power_supply", error), end;
+    for (; !error && entry != end; entry.increment(error)) {
+        const auto path = entry->path();
+        std::string type;
+        if (!(std::ifstream(path / "type") >> type) || type != "Battery")
+            continue;
+        BatteryStatus battery;
+        int capacity = -1;
+        if (std::ifstream(path / "capacity") >> capacity && capacity >= 0 && capacity <= 100)
+            battery.percent = capacity;
+        std::string status;
+        battery.charging = (std::ifstream(path / "status") >> status) && status == "Charging";
+        return battery;
+    }
+    return {};
+}
+
 struct Display::Impl {
     bool desktop, headless;
     lv_display_t *display = nullptr;

@@ -261,7 +261,14 @@ void list_test() {
                     get("/api/chat-threads/events?sinceSeqId=10",
                         {{"events", Json::array({e})}, {"hasMore", true}}),
                     get("/api/chat-threads/events?sinceSeqId=11",
-                        {{"events", Json::array()}, {"hasMore", false}}),
+                        {{"events", Json::array({{{"id", id(12)},
+                                                  {"seqId", 12},
+                                                  {"kind", "sort_touched"},
+                                                  {"chatThreadId", thread_id},
+                                                  {"agentId", agent},
+                                                  {"title", nullptr},
+                                                  {"createdAt", "2026-11-18"}}})},
+                         {"hasMore", false}}),
                     get("/api/indicators",
                         {{"threads", {{thread_id, "active"}}}, {"unreadAt", Json::object()}}),
                     get("/api/projects",
@@ -269,7 +276,7 @@ void list_test() {
     auto result = f.client().list();
     check(result.threads.size() == 1 && result.threads[0].title == "After" &&
               result.threads[0].active,
-          "snapshot + lifecycle tail");
+          "ordering events preserve the title established by a rename");
     check(result.threads[0].project_id == project && result.projects.at(0).title == "Project",
           "projects");
     f.server.finish();
@@ -295,7 +302,7 @@ void metadata_only_test() {
     check(c.indicators()["threads"][thread_id] == "unread", "independent indicator read");
     f.server.finish();
 }
-void large_list_test() {
+void large_list_test(bool project_only) {
     Fixture f;
     auto storage = f.server.origin() + "/storage/large-list";
     auto rows = Json::array();
@@ -304,6 +311,8 @@ void large_list_test() {
                         {"agentId", agent},
                         {"sortAt", std::to_string(i)},
                         {"title", "Thread " + std::to_string(i)},
+                        {"projectId", i == 1001 ? Json(project) : Json(nullptr)},
+                        {"pinnedAt", i == 1001 ? Json("2026-11-17") : Json(nullptr)},
                         {"hidden", i == 8999}});
     Json event = {{"id", id(11)},
                   {"seqId", 11},
@@ -321,10 +330,16 @@ void large_list_test() {
             {{"events", Json::array({event})}, {"hasMore", false}}),
         get("/api/projects", {{"projects", Json::array()}}),
     });
-    auto result = f.client().list(false);
-    check(result.threads.size() == 128, "large workspace only loads the visible window");
-    check(result.threads[0].id == id(1000), "tail can promote a thread outside the window");
-    check(result.threads[1].id == id(8998), "hidden thread excluded before applying window");
+    auto result = f.client().list(false, project_only ? project : "");
+    if (project_only) {
+        check(result.threads.size() == 1 && result.threads[0].id == id(1001) &&
+                  result.threads[0].pinned,
+              "project window includes older pinned chats outside the global window");
+    } else {
+        check(result.threads.size() == 128, "large workspace only loads the visible window");
+        check(result.threads[0].id == id(1000), "tail can promote a thread outside the window");
+        check(result.threads[1].id == id(8998), "hidden thread excluded before applying window");
+    }
     f.server.finish();
 }
 void history_test() {
@@ -738,7 +753,8 @@ int main() {
         ::setenv("OKOU_ZERO_TEST_ALLOW_LOOPBACK_HTTP", "1", 1);
         list_test();
         metadata_only_test();
-        large_list_test();
+        large_list_test(false);
+        large_list_test(true);
         history_test();
         bad_history_tests();
         send_test();

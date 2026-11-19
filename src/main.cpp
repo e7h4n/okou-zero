@@ -1,3 +1,4 @@
+#include "emoji.hpp"
 #include "okou/diagnostics.hpp"
 #include "okou/dictation.hpp"
 #include "okou/ui.hpp"
@@ -44,6 +45,7 @@ class Engine {
     std::atomic_bool stopping_{false}, metadata_pending_{false}, indicators_pending_{false},
         history_pending_{false};
     std::string selected_thread_;
+    std::string selected_project_;
     Json indicators_ = Json::object();
     void emit(Update update) {
         std::lock_guard<std::mutex> guard(mutex_);
@@ -93,7 +95,6 @@ class Engine {
             realtime_->stop();
             realtime_.reset();
         }
-        emit([](UI &ui) { ui.live = false; });
     }
     void start_realtime(const std::shared_ptr<Session> &s) {
         stop_realtime();
@@ -118,15 +119,9 @@ class Engine {
                 if (!current || current != std::atomic_load(&session_) || stopping_)
                     return;
                 if (name == "connection:connected")
-                    emit([](UI &ui) {
-                        ui.live = true;
-                        ui.status = "Connected";
-                    });
+                    emit([](UI &ui) { ui.status = "Connected"; });
                 else if (name == "connection:disconnected")
-                    emit([](UI &ui) {
-                        ui.live = false;
-                        ui.status = "Reconnecting...";
-                    });
+                    emit([](UI &ui) { ui.status = "Reconnecting..."; });
                 if (name == "connection:gap") {
                     refresh(false);
                     refresh_indicators();
@@ -299,6 +294,7 @@ class Engine {
                 }
                 indicators_ = Json::object();
                 selected_thread_.clear();
+                selected_project_.clear();
                 auto tokens = s->tokens;
                 emit([tokens](UI &ui) {
                     ui.reset_account();
@@ -327,14 +323,17 @@ class Engine {
         enqueue([this, include_indicators] {
             metadata_pending_ = false;
             auto s = std::atomic_load(&session_);
+            auto project = selected_project_;
             ListState list;
             {
                 std::lock_guard<std::mutex> guard(s->io);
                 ensure(*s);
-                list = s->client->list(false);
+                list = s->client->list(false, project);
             }
             auto indicators = indicators_;
-            emit([list = std::move(list), indicators](UI &ui) mutable {
+            emit([list = std::move(list), indicators, project](UI &ui) mutable {
+                if (ui.project_filter != project)
+                    return;
                 ui.list = std::move(list);
                 apply_indicators(ui, indicators);
                 ui.busy = false;
@@ -342,6 +341,12 @@ class Engine {
             });
             if (include_indicators)
                 refresh_indicators();
+        });
+    }
+    void select_project(std::string project) {
+        enqueue([this, project = std::move(project)] {
+            selected_project_ = project;
+            refresh(false);
         });
     }
     void refresh_indicators() {
@@ -535,6 +540,7 @@ class Engine {
                 s->client.reset();
             }
             selected_thread_.clear();
+            selected_project_.clear();
             indicators_ = Json::object();
             emit([switch_workspace](UI &ui) {
                 ui.reset_account();
@@ -606,6 +612,11 @@ int main(int argc, char **argv) {
                 if (!condition)
                     throw std::runtime_error("UI keyboard test failed");
             };
+            check(split_emoji_title("工作 👩🏽‍💻 计划") ==
+                  std::make_pair(std::string("👩🏽‍💻"), std::string("工作 计划")));
+            check(split_emoji_title("🇨🇳 项目").first == "🇨🇳");
+            check(split_emoji_title("1️⃣ Project").second == "Project");
+            check(split_emoji_title("Plan 2026").first.empty());
             ui.handle({Key::down, {}, false, false});
             check(ui.selected == 1);
             check(ui.handle({Key::enter, {}, false, false}) == Action::open);
@@ -675,6 +686,7 @@ int main(int argc, char **argv) {
         }
         auto last = std::chrono::steady_clock::now();
         auto start = last;
+        auto next_battery_read = last;
         bool dirty = true, running = true, restart = false;
         UpdateProcess updater;
         if (!demo)
@@ -684,6 +696,15 @@ int main(int argc, char **argv) {
             lv_tick_inc(static_cast<std::uint32_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count()));
             last = now;
+            if (!demo && now >= next_battery_read) {
+                next_battery_read = now + std::chrono::seconds(5);
+                auto battery = read_battery_status();
+                if (battery.percent != ui.battery.percent ||
+                    battery.charging != ui.battery.charging) {
+                    ui.battery = battery;
+                    dirty = true;
+                }
+            }
             if (engine && engine->drain(ui))
                 dirty = true;
             if (updater.poll()) {
@@ -747,6 +768,11 @@ int main(int argc, char **argv) {
                 case Action::refresh:
                     engine->refresh();
                     engine->refresh_history();
+                    break;
+                case Action::filter_project:
+                    ui.list.threads.clear();
+                    ui.status = "Loading chats...";
+                    engine->select_project(ui.project_filter);
                     break;
                 case Action::open:
                     engine->open(ui.current);
