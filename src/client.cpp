@@ -730,7 +730,8 @@ ListState Client::list(bool include_indicators, const std::string &project_filte
                             continue;
                         v = {{"id", t}, {"archived", false}};
                     }
-                    if (e.contains("title"))
+                    // The wire format carries a nullable title on every event.
+                    if ((kind == "created" || kind == "renamed") && e.contains("title"))
                         v["title"] = clipped(str(e, "title"), 512);
                     for (const char *k : {"agentId", "projectId", "reassignedAgentId"})
                         if (e.contains(k)) {

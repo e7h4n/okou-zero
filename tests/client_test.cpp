@@ -261,7 +261,14 @@ void list_test() {
                     get("/api/chat-threads/events?sinceSeqId=10",
                         {{"events", Json::array({e})}, {"hasMore", true}}),
                     get("/api/chat-threads/events?sinceSeqId=11",
-                        {{"events", Json::array()}, {"hasMore", false}}),
+                        {{"events", Json::array({{{"id", id(12)},
+                                                  {"seqId", 12},
+                                                  {"kind", "sort_touched"},
+                                                  {"chatThreadId", thread_id},
+                                                  {"agentId", agent},
+                                                  {"title", nullptr},
+                                                  {"createdAt", "2026-11-18"}}})},
+                         {"hasMore", false}}),
                     get("/api/indicators",
                         {{"threads", {{thread_id, "active"}}}, {"unreadAt", Json::object()}}),
                     get("/api/projects",
@@ -269,7 +276,7 @@ void list_test() {
     auto result = f.client().list();
     check(result.threads.size() == 1 && result.threads[0].title == "After" &&
               result.threads[0].active,
-          "snapshot + lifecycle tail");
+          "ordering events preserve the title established by a rename");
     check(result.threads[0].project_id == project && result.projects.at(0).title == "Project",
           "projects");
     f.server.finish();
