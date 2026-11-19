@@ -106,6 +106,7 @@ struct Thread {
     std::string id, title, project_id, agent_id;
     bool active = false, unread = false;
     bool muted = false;
+    bool pinned = false;
 };
 struct Message {
     std::string id, role, text;
@@ -126,7 +127,7 @@ class Client {
     const Tokens &tokens() const {
         return tokens_;
     }
-    ListState list(bool include_indicators = true);
+    ListState list(bool include_indicators = true, const std::string &project_filter = {});
     Json indicators();
     std::vector<Message> history(const std::string &thread_id);
     void mark_read(const std::string &thread_id);

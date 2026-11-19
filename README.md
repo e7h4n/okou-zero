@@ -34,7 +34,7 @@ Ubuntu 24.04 (amd64 or arm64):
 
 ```sh
 sudo apt-get install cmake ninja-build g++ libcurl4-openssl-dev libssl-dev \
-  zlib1g-dev libsqlite3-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk \
+  zlib1g-dev libsqlite3-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev libharfbuzz-dev libicu-dev fonts-noto-cjk fonts-noto-color-emoji \
   python3 openssl sudo
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
 cmake --build build --parallel 2

@@ -38,7 +38,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev libsqlite3-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk clang-format dpkg-dev python3 openssl sudo
+          sudo apt-get install -y cmake ninja-build g++ libcurl4-openssl-dev libssl-dev zlib1g-dev libsqlite3-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev libharfbuzz-dev libicu-dev fonts-noto-cjk fonts-noto-color-emoji clang-format dpkg-dev python3 openssl sudo
       - name: Check repository hygiene
         if: matrix.arch == 'amd64'
         run: |

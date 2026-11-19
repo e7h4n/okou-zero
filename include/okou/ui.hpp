@@ -3,12 +3,14 @@
 #include "okou/platform.hpp"
 
 namespace okou {
+class EmojiRenderer;
 enum class Page { login, setup, threads, projects, chat, settings };
 enum class Action {
     none,
     login,
     configure,
     refresh,
+    filter_project,
     open,
     send,
     voice,
@@ -48,12 +50,13 @@ class UI {
     lv_obj_t *body_ = nullptr;
     lv_obj_t *footer_ = nullptr;
     lv_font_t *font_ = nullptr;
+    std::unique_ptr<EmojiRenderer> emoji_;
     int history_scroll_ = 0;
     std::map<std::string, std::string> drafts_;
     std::map<std::string, std::string> pending_texts_;
     lv_obj_t *label(lv_obj_t *parent, const std::string &text, int x, int y, int width,
                     std::uint32_t color, int height = 0);
-    void row(const std::string &title, const std::string &detail, int y, bool selected,
-             std::uint32_t color);
+    lv_obj_t *row(const std::string &title, const std::string &detail, int y, bool selected,
+                  std::uint32_t color, const char *icon = nullptr, bool emoji_badge = false);
 };
 } // namespace okou
