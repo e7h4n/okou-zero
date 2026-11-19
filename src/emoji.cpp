@@ -160,10 +160,13 @@ struct EmojiRenderer::Font {
     hb_font_t *shaper = nullptr;
 
     Font() {
-        if (FT_Init_FreeType(&library) == 0 &&
-            FT_New_Face(library, "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf", 0, &face) ==
-                0 &&
-            FT_Select_Size(face, 0) == 0)
+        if (FT_Init_FreeType(&library) != 0)
+            return;
+        if (FT_New_Face(library, "/usr/share/okou-zero/NotoColorEmoji.ttf", 0, &face) != 0 &&
+            FT_New_Face(library, "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf", 0, &face) !=
+                0)
+            return;
+        if (FT_Select_Size(face, 0) == 0)
             shaper = hb_ft_font_create_referenced(face);
     }
     ~Font() {

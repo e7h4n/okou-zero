@@ -2,13 +2,12 @@ name: Build and test
 on:
   push:
     branches: [main, 'feat/**', 'fix/**']
-    tags: ['v*']
   pull_request:
 permissions:
   contents: read
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   native:
     name: Native ${{ matrix.arch }} protocols, UI and package
@@ -34,6 +33,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: ${{ github.ref == 'refs/heads/main' && '0' || '1' }}
           persist-credentials: false
       - name: Install build dependencies
         run: |
@@ -50,17 +50,23 @@ jobs:
           PUBLIC_CLIENT_ID: ${{ vars.OKOU_ZERO_OAUTH_CLIENT_ID }}
           BUILD_TYPE: ${{ matrix.build_type }}
           BUILD_DESKTOP: ${{ matrix.desktop }}
-          TRUSTED_PUBLISH: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+          TRUSTED_PUBLISH: ${{ github.event_name == 'push' && github.repository == 'e7h4n/okou-zero' && github.ref == 'refs/heads/main' }}
         shell: bash
         run: |
           # Forks may run offline tests without a configured public client.
-          # Main/tag builds must never silently publish an unconfigured package.
+          # A trusted main build must never publish an unconfigured package.
           if [[ "$TRUSTED_PUBLISH" == true && -z "$PUBLIC_CLIENT_ID" ]]; then
             echo 'Missing public OKOU_ZERO_OAUTH_CLIENT_ID Variable' >&2
             exit 1
           fi
+          release_version=()
+          if [[ "$TRUSTED_PUBLISH" == true ]]; then
+            version=$(python3 scripts/release.py --next-version)
+            release_version=(-DOKOU_ZERO_BUILD_VERSION="$version")
+          fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID"
+            -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID" \
+            "${release_version[@]}"
       - name: Read configured CMake version
         id: version
         shell: bash
@@ -113,7 +119,7 @@ jobs:
           retention-days: 30
   release:
     name: Publish signed stable arm64 update
-    if: github.event_name == 'push' && github.repository == 'e7h4n/okou-zero' && startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && github.repository == 'e7h4n/okou-zero' && github.ref == 'refs/heads/main'
     # The entire dual-native matrix must pass, including installation and UI smoke tests.
     needs: native
     runs-on: ubuntu-24.04
@@ -121,10 +127,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Check out trusted tag
+      - name: Check out tested main commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Download this run's tested arm64 package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -139,10 +146,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OKOU_UPDATE_SIGNING_KEY: ${{ secrets.OKOU_UPDATE_SIGNING_KEY }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.native.outputs.version }}
+          RELEASE_COMMIT: ${{ github.sha }}
         shell: bash
         run: |
           shopt -s nullglob
           packages=(release-input/*.deb)
           test "${#packages[@]}" -eq 1
-          python3 scripts/release.py --tag "$RELEASE_TAG" --package "${packages[0]}" --output-dir release-assets
+          (cd release-input && sha256sum --check SHA256SUMS)
+          python3 scripts/release.py --tag "v$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
+            --package "${packages[0]}" --output-dir release-assets

@@ -85,6 +85,13 @@ LVGL's built-in Montserrat font is licensed under the SIL Open Font License 1.1.
 The complete upstream notice is installed as `/usr/share/doc/okou-zero/Montserrat-OFL.txt`.
 Source: LVGL `scripts/built_in_font/font_license/Montserrat/OFL.txt` at the pinned commit.
 
+## Noto Color Emoji
+
+The package includes Noto Color Emoji from the distribution's
+`fonts-noto-color-emoji` package under the SIL Open Font License 1.1. The bundled
+copyright and license notice is installed as
+`/usr/share/doc/okou-zero/NotoColorEmoji-copyright.txt`.
+
 ## Okou avatar (brand asset, not MIT-licensed code)
 
 The existing approved source asset `assets/okou-avatar-source.png` is the official

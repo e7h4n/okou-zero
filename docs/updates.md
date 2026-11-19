@@ -33,13 +33,12 @@ The root helper takes an exclusive update lock, copies bounded stdin into a fres
 
 ## Release procedure
 
-1. Update CMake's project version, implement/test the change and push reviewed source.
-2. Create and push matching stable tag `vMAJOR.MINOR.PATCH` on that commit.
-3. Both native CI jobs run all tests and clean install/uninstall smoke checks. Only after both succeed can the trusted-repository tag job read the signing secret.
-4. The tag job validates the tag against CMake and actual ARM64 Debian metadata, signs the manifest, verifies its signature against the committed public key, and publishes a new GitHub Release with `--verify-tag`. It never overwrites an existing release.
-5. Devices offer the published newer release on their next app open.
+1. A push to the trusted repository's `main` starts the release build. It increments the patch version from the previous stable tag on main's first-parent history and passes that version to CMake.
+2. Both native CI jobs must pass protocol, UI, and package-install tests. A newer queued main push can supersede a pending build.
+3. The publisher verifies the artifact checksum and Debian metadata, then signs and verifies the manifest against the committed public key. It creates the matching tag at the tested commit and publishes the GitHub Release. It never overwrites an existing release.
+4. Devices offer the published newer release on their next app open.
 
-`python3 scripts/release.py --prepare-only ...` prepares assets without publishing. Fork PRs and branch CI have read-only permissions and no signing operation. Ordinary main commits do not become updates without a stable release tag.
+`python3 scripts/release.py --prepare-only ...` prepares assets without publishing. PR and feature-branch CI do not sign or publish updates.
 
 ## Deliberate limits and recovery
 

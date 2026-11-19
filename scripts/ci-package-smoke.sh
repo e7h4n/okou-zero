@@ -44,6 +44,12 @@ for desktop in share/applications share/APPLaunch/applications; do
   grep -qx 'Exec=/usr/bin/okou-zero' "$staging/package/usr/$desktop/okou-zero.desktop"
 done
 test -x "$staging/package/usr/bin/okou-zero"
+test -s "$staging/package/usr/share/okou-zero/NotoColorEmoji.ttf"
+test -s "$staging/package/usr/share/doc/okou-zero/NotoColorEmoji-copyright.txt"
+if grep -q 'fonts-noto-color-emoji' <<< "$dependencies"; then
+  echo 'Signed upgrades must include the color emoji font without requiring a new system package' >&2
+  exit 1
+fi
 verify_updater_files() {
   local root=$1
   local helper="$root/usr/libexec/okou-zero-update-install"
