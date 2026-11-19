@@ -160,7 +160,7 @@ void UI::reset_account() {
     verification_uri.clear();
     selected = 0;
     history_scroll_ = 0;
-    busy = recording = live = uncertain = submitting = voice_pending = voice_working = false;
+    busy = recording = uncertain = submitting = voice_pending = voice_working = false;
 }
 void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain) {
     if (current.id == thread_id) {
