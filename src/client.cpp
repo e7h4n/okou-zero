@@ -685,7 +685,7 @@ ListState Client::list(bool include_indicators) {
         cursor(n, eid);
         if (s.contains("url")) {
             SnapshotSpool spool;
-            snapshot_response(str(s, "url", true), spool.file());
+            snapshot_response(str(s, "url"), spool.file());
             if (!spool.read(index).contains("chatThreads"))
                 invalid();
         }
