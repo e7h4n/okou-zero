@@ -34,7 +34,7 @@ Ubuntu 24.04 (amd64 or arm64):
 
 ```sh
 sudo apt-get install cmake ninja-build g++ libcurl4-openssl-dev libssl-dev \
-  zlib1g-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk \
+  zlib1g-dev libsqlite3-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev fonts-noto-cjk \
   python3 openssl sudo
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
 cmake --build build --parallel 2
@@ -79,6 +79,8 @@ is `https://api.okou.ai/mcp`, and issuer is discovered via metadata. The bundled
 public client must belong to the production Clerk instance. Signed stable updates
 remain enabled. See [bundled defaults](docs/auth-setup.md#bundled-defaults) for
 configuration override behavior and fresh authorization after switching origins.
+Client failures emit [sanitized stderr diagnostics](docs/auth-setup.md#sanitized-failure-diagnostics)
+for the launcher's existing journal, without credentials or request/response dumps.
 
 ## Signed updates
 

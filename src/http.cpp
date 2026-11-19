@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "okou/core.hpp"
+#include "okou/diagnostics.hpp"
 #ifndef OKOU_ZERO_VERSION
 #define OKOU_ZERO_VERSION "dev"
 #endif
@@ -25,17 +26,26 @@ struct CurlGlobal {
 };
 struct Transfer {
     HttpResponse response;
+    std::FILE *output = nullptr;
+    std::size_t body_bytes = 0;
     std::size_t header_bytes = 0;
     bool overflow = false;
+    bool output_error = false;
 };
 std::size_t receive(char *p, std::size_t size, std::size_t n, void *arg) noexcept {
     auto &t = *static_cast<Transfer *>(arg);
     if (size && n > std::numeric_limits<std::size_t>::max() / size)
         return 0;
     auto bytes = size * n;
-    if (bytes > max_body - t.response.body.size()) {
+    if (bytes > max_body - t.body_bytes) {
         t.overflow = true;
         return 0;
+    }
+    t.body_bytes += bytes;
+    if (t.output) {
+        const auto written = std::fwrite(p, 1, bytes, t.output);
+        t.output_error = written != bytes;
+        return written;
     }
     try {
         t.response.body.append(p, bytes);
@@ -95,8 +105,9 @@ std::string request_id() {
     return out;
 }
 } // namespace
-HttpError::HttpError(long s, std::string message, bool u)
-    : std::runtime_error(std::move(message)), status(s), uncertain(u) {}
+HttpError::HttpError(long s, std::string message, bool u, int code, std::string_view oauth)
+    : std::runtime_error(std::move(message)), status(s), uncertain(u), curl_code(code),
+      oauth_error(diagnostics::oauth_error_code(oauth)) {}
 Json HttpResponse::json() const {
     try {
         return Json::parse(body);
@@ -123,7 +134,7 @@ std::string Http::encode(const std::string &value) {
 HttpResponse Http::request(const std::string &method, const std::string &url,
                            const std::string &body, const std::string &bearer,
                            const std::map<std::string, std::string> &headers,
-                           const std::vector<UploadPart> &parts) {
+                           const std::vector<UploadPart> &parts, std::FILE *output) {
     static CurlGlobal global;
     if (cancelled_ && cancelled_->load())
         throw HttpError(0, "Request cancelled");
@@ -158,6 +169,7 @@ HttpResponse Http::request(const std::string &method, const std::string &url,
     if (!curl)
         throw HttpError(0, "HTTP initialization failed");
     Transfer transfer;
+    transfer.output = output;
     curl_slist *list = nullptr;
     struct ListGuard {
         curl_slist *&list;
@@ -258,13 +270,15 @@ HttpResponse Http::request(const std::string &method, const std::string &url,
     curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &transfer.response.status);
     if (result != CURLE_OK) {
         const char *reason = transfer.overflow                     ? "Response exceeds size limit"
+                             : transfer.output_error               ? "Cannot spool HTTP response"
                              : result == CURLE_ABORTED_BY_CALLBACK ? "Request cancelled"
                              : result == CURLE_OPERATION_TIMEDOUT  ? "Request timed out"
                                                                   : "Network or TLS request failed";
-        throw HttpError(transfer.response.status, reason, writing);
+        throw HttpError(transfer.response.status, reason, writing, static_cast<int>(result));
     }
     if (transfer.response.status >= 500)
-        throw HttpError(transfer.response.status, "Server request failed", writing);
+        throw HttpError(transfer.response.status, "Server request failed", writing, 0,
+                        diagnostics::response_oauth_error(transfer.response.body));
     // HTTP 4xx is returned so OAuth can inspect the standard error field. Callers
     // must check status before interpreting success payloads. No request is retried.
     return std::move(transfer.response);

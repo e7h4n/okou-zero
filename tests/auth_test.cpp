@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
+#include "diagnostic_capture.hpp"
 #include "okou/core.hpp"
 #include <ctime>
+#include <curl/curl.h>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +10,7 @@
 #include <mutex>
 #include <netinet/in.h>
 #include <openssl/evp.h>
+#include <optional>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <thread>
@@ -23,6 +26,8 @@ using okou::Json;
 struct Reply {
     int status;
     Json body;
+    std::optional<std::string> raw = {};
+    bool disconnect = false;
 };
 class Fixture {
     int fd_;
@@ -76,14 +81,19 @@ class Fixture {
                     std::lock_guard<std::mutex> lock(mutex_);
                     requests_.push_back(request);
                 }
-                auto body = r.body.dump();
+                if (r.disconnect) {
+                    ::close(c);
+                    continue;
+                }
+                auto body = r.raw ? *r.raw : r.body.dump();
                 for (std::size_t p = 0; (p = body.find("$BASE", p)) != std::string::npos;
                      p += base.size())
                     body.replace(p, 5, base);
-                auto response = "HTTP/1.1 " + std::to_string(r.status) +
-                                " Fixture\r\nConnection: close\r\nContent-Type: "
-                                "application/json\r\nContent-Length: " +
-                                std::to_string(body.size()) + "\r\n\r\n" + body;
+                auto response =
+                    "HTTP/1.1 " + std::to_string(r.status) +
+                    " Fixture\r\nConnection: close\r\nContent-Type: "
+                    "application/json\r\nX-Private: HEADER_SENTINEL\r\nContent-Length: " +
+                    std::to_string(body.size()) + "\r\n\r\n" + body;
                 for (std::size_t p = 0; p < response.size();) {
                     auto n = ::send(c, response.data() + p, response.size() - p, MSG_NOSIGNAL);
                     if (n <= 0)
@@ -182,6 +192,218 @@ Json record(const std::string &path) {
     in >> j;
     return j;
 }
+void diagnostic_record(const std::string &line, const char *stage, const char *category,
+                       const char *reason, long status, int curl, const char *oauth,
+                       bool uncertain = false) {
+    CHECK(!line.empty() && line.size() < 768 && line.back() == '\n');
+    CHECK(line.find('\n') == line.size() - 1);
+    for (const auto *secret : {"SENTINEL", "private-device", "SAFE-CODE", "public-test",
+                               "user_test", "org_test", "127.0.0.1", "https://", "tokens.json"})
+        CHECK(line.find(secret) == std::string::npos);
+    const Json expected = {
+        {"schema", 1},           {"component", "okou-zero"}, {"version", OKOU_ZERO_VERSION},
+        {"stage", stage},        {"category", category},     {"reason", reason},
+        {"http_status", status}, {"curl_code", curl},        {"oauth_error", oauth},
+        {"uncertain", uncertain}};
+    CHECK(Json::parse(line) == expected);
+}
+void diagnostic_tests(const std::string &root, okou::Http &http) {
+    {
+        auto d = device();
+        d["untrusted"] = "BODY_SENTINEL";
+        Fixture f({{200, metadata()},
+                   {200, d},
+                   {400, {{"error", "authorization_pending"}, {"error_description", "SENTINEL"}}},
+                   {400, {{"error", "slow_down"}}},
+                   {403, {{"error", "access_denied"}, {"error_description", "SENTINEL"}}},
+                   {400, {{"error", "expired_token"}}},
+                   {200, token()}});
+        okou::OAuth auth(config(f, root + "/diag-terminal"), http);
+        DiagnosticCapture capture;
+        auto code = auth.begin();
+        CHECK(capture.take().empty());
+        CHECK(auth.poll(code).state == okou::PollState::pending);
+        CHECK(capture.take().empty());
+        CHECK(auth.poll(code).state == okou::PollState::slow_down);
+        CHECK(capture.take().empty());
+        CHECK(auth.poll(code).state == okou::PollState::denied);
+        diagnostic_record(capture.take(), "token_polling", "http", "polling_rejected", 403, 0,
+                          "access_denied");
+        CHECK(auth.poll(code).state == okou::PollState::expired);
+        diagnostic_record(capture.take(), "token_polling", "http", "polling_rejected", 400, 0,
+                          "expired_token");
+        CHECK(auth.poll(code).state == okou::PollState::authorized);
+        CHECK(capture.take().empty());
+    }
+    {
+        Fixture f({{200, metadata()},
+                   {400,
+                    {{"error", "invalid_client"},
+                     {"error_description", "BODY_SENTINEL"},
+                     {"access_token", "TOKEN_SENTINEL"},
+                     {"id_token", "ID_SENTINEL"}}}});
+        auto c = config(f, root + "/diag-device");
+        c.oauth_client_id = "CLIENT_SENTINEL";
+        c.oauth_resource = "https://resource-SENTINEL.example/mcp";
+        okou::OAuth auth(c, http);
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.begin(); }).empty());
+        diagnostic_record(capture.take(), "device_authorization", "http", "oauth_rejected", 400, 0,
+                          "invalid_client");
+    }
+    for (const auto &value : {Json("unknown_SENTINEL"), Json("invalid_grant\nSENTINEL"),
+                              Json({{"SENTINEL", true}}), Json(nullptr)}) {
+        Fixture f({{200, metadata()},
+                   {200, device()},
+                   {400, {{"error", value}, {"error_description", "BODY_SENTINEL"}}}});
+        okou::OAuth auth(config(f, root + "/diag-invalid"), http);
+        auto code = auth.begin();
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.poll(code); }).empty());
+        // Null retains str()'s existing absent-field behavior; status still rejects it.
+        const bool rejected = value.is_string() || value.is_null();
+        diagnostic_record(capture.take(), "token_polling", rejected ? "http" : "exception",
+                          rejected ? "polling_rejected" : "invalid_oauth_field", 400, 0, "unknown");
+    }
+    {
+        Fixture f({{200, metadata()},
+                   {200, device()},
+                   {400, Json(), std::string("{\"error\":PARSER_SENTINEL")}});
+        okou::OAuth auth(config(f, root + "/diag-json"), http);
+        auto code = auth.begin();
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.poll(code); }).empty());
+        diagnostic_record(capture.take(), "token_polling", "http", "invalid_json_response", 400, 0,
+                          "unknown");
+    }
+    {
+        Fixture f({{200, metadata()}, {200, device()}, {0, Json(), {}, true}});
+        okou::OAuth auth(config(f, root + "/diag-transport"), http);
+        auto code = auth.begin();
+        code.device_code = "DEVICE_SENTINEL";
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.poll(code); }).empty());
+        diagnostic_record(capture.take(), "token_polling", "transport", "network_or_tls_failed", 0,
+                          CURLE_GOT_NOTHING, "none", true);
+    }
+    {
+        Fixture f(
+            {{200, metadata()},
+             {503,
+              {{"error", "temporarily_unavailable"}, {"error_description", "BODY_SENTINEL"}}}});
+        auto c = config(f, root + "/diag-refresh");
+        okou::OAuth auth(c, http);
+        okou::Tokens previous;
+        previous.access_token = "ACCESS_SENTINEL";
+        previous.refresh_token = "REFRESH_SENTINEL";
+        DiagnosticCapture capture;
+        CHECK(fails([&] { auth.refresh(previous); }) == "Refresh failed; authorize device again");
+        diagnostic_record(capture.take(), "refresh", "http", "server_rejected", 503, 0,
+                          "temporarily_unavailable", true);
+        CHECK(record(c.data_dir + "/tokens.json")["reauthorization_required"] == true);
+        CHECK(auth.load().access_token.empty());
+    }
+    {
+        auto bad = token();
+        bad["access_token"] = "ACCESS_SENTINEL";
+        Fixture f({{200, metadata()}, {200, device()}, {200, bad}});
+        okou::OAuth auth(config(f, root + "/diag-validation"), http);
+        auto code = auth.begin();
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.poll(code); }).empty());
+        diagnostic_record(capture.take(), "token_validation", "exception", "jwt_required", 200, 0,
+                          "none");
+    }
+    {
+        Fixture f({{400, {{"error", "invalid_request"}, {"error_description", "SENTINEL"}}}});
+        auto c = config(f, root + "/diag-resource");
+        c.oauth_issuer.clear();
+        okou::OAuth auth(c, http);
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.poll({}); }).empty());
+        diagnostic_record(capture.take(), "resource_discovery", "http", "oauth_rejected", 400, 0,
+                          "invalid_request");
+    }
+    {
+        Fixture f({{400, {{"error", "invalid_request"}}}});
+        okou::OAuth auth(config(f, root + "/diag-issuer"), http);
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.poll({}); }).empty());
+        diagnostic_record(capture.take(), "issuer_discovery", "http", "oauth_rejected", 400, 0,
+                          "invalid_request");
+    }
+    {
+        auto m = metadata();
+        m["issuer"] = "https://ISSUER_SENTINEL.example";
+        Fixture f({{200, m}});
+        okou::OAuth auth(config(f, root + "/diag-metadata"), http);
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.begin(); }).empty());
+        diagnostic_record(capture.take(), "issuer_discovery", "exception", "issuer_mismatch", 200,
+                          0, "none");
+    }
+    for (const auto *issuer : {"http://ISSUER_SENTINEL.example",
+                               "https://ISSUER_SENTINEL.example?query=SECRET_SENTINEL"}) {
+        Fixture f(
+            {{200,
+              {{"authorization_servers", {issuer}}, {"resource", "https://api.okou.ai/mcp"}}}});
+        auto c = config(f, root + "/diag-local-issuer");
+        c.oauth_issuer.clear();
+        okou::OAuth auth(c, http);
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.begin(); }).empty());
+        diagnostic_record(capture.take(), "issuer_discovery", "exception",
+                          std::string(issuer).find('?') == std::string::npos
+                              ? "insecure_oauth_endpoint"
+                              : "invalid_oauth_issuer",
+                          0, 0, "none");
+        CHECK(f.requests().size() == 1); // Local validation must not request the issuer.
+    }
+    for (bool fallback : {false, true}) {
+        std::vector<Reply> replies = {
+            {200, {{"authorization_servers", {"$BASE"}}, {"resource", "https://api.okou.ai/mcp"}}}};
+        if (fallback)
+            replies.push_back({404, {{"error", "UNKNOWN_SENTINEL"}}});
+        replies.push_back({0, Json(), {}, true});
+        Fixture f(std::move(replies));
+        auto c = config(f, root + "/diag-discovery-transport");
+        c.oauth_issuer.clear();
+        okou::OAuth auth(c, http);
+        DiagnosticCapture capture;
+        CHECK(!fails([&] { auth.poll({}); }).empty());
+        diagnostic_record(capture.take(), "issuer_discovery", "transport", "network_or_tls_failed",
+                          0, CURLE_GOT_NOTHING, "none");
+    }
+    {
+        Fixture f({{200, metadata()},
+                   {200, device()},
+                   {400, {{"error", "invalid_token"}, {"error_description", "SENTINEL"}}}});
+        const auto c = config(f, root + "/diag-revoke-rejected");
+        okou::OAuth auth(c, http);
+        (void)auth.begin();
+        okou::Tokens t;
+        t.refresh_token = "REFRESH_SENTINEL";
+        auth.save(t);
+        DiagnosticCapture capture;
+        auth.logout(t); // Best effort stays nonthrowing after the status rejection.
+        diagnostic_record(capture.take(), "logout_revocation", "http", "oauth_rejected", 400, 0,
+                          "invalid_token");
+        CHECK(!std::filesystem::exists(c.data_dir + "/tokens.json"));
+    }
+    {
+        Fixture f({{200, metadata()}, {200, device()}, {503, {{"error", "server_error"}}}});
+        okou::OAuth auth(config(f, root + "/diag-revoke"), http);
+        (void)auth.begin();
+        okou::Tokens t;
+        t.refresh_token = "REFRESH_SENTINEL";
+        auth.save(t);
+        DiagnosticCapture capture;
+        auth.logout(t);
+        diagnostic_record(capture.take(), "logout_revocation", "http", "server_rejected", 503, 0,
+                          "server_error", true);
+        CHECK(auth.load().access_token.empty());
+    }
+}
 void tests() {
     ::setenv("OKOU_ZERO_TEST_ALLOW_LOOPBACK_HTTP", "1", 1);
     char temp[] = "/tmp/okou-auth-test-XXXXXX";
@@ -192,6 +414,7 @@ void tests() {
     ::unsetenv("OKOU_ZERO_CONFIG");
     ::unsetenv("OKOU_ZERO_DATA_DIR");
     okou::Http http;
+    diagnostic_tests(root, http);
     {
         Fixture f(
             {{200, metadata()},
@@ -206,6 +429,7 @@ void tests() {
              {200, token("org_test", "")},
              {503, {{"error", "PRIVATE"}}}});
         auto c = config(f, root + "/credentials");
+        c.scopes = "openid profile offline_access user:org:read";
         okou::OAuth auth(c, http);
         auto d = auth.begin();
         CHECK(d.interval == 7);
@@ -256,8 +480,26 @@ void tests() {
         CHECK(auth.load().access_token.empty());
         auto requests = f.requests();
         CHECK(requests.size() == 10);
-        CHECK(requests[1].find("client_id=public-test") != std::string::npos);
-        CHECK(requests[1].find("resource=https%3A%2F%2Fapi.okou.ai%2Fmcp") != std::string::npos);
+        auto form_body = [&](std::size_t index, const std::string &path) {
+            const auto &request = requests[index];
+            CHECK(request.rfind("POST " + path + " HTTP/", 0) == 0);
+            CHECK(request.find("\r\nContent-Type: application/x-www-form-urlencoded\r\n") !=
+                  std::string::npos);
+            auto separator = request.find("\r\n\r\n");
+            CHECK(separator != std::string::npos);
+            return request.substr(separator + 4);
+        };
+        CHECK(form_body(1, "/device") ==
+              "client_id=public-test&scope=openid%20profile%20offline_access%20user%3Aorg%3Aread");
+        for (std::size_t i = 2; i <= 6; ++i) {
+            CHECK(form_body(i, "/token") ==
+                  "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
+                  "&device_code=private-device&client_id=public-test");
+        }
+        CHECK(form_body(7, "/token") ==
+              "grant_type=refresh_token&refresh_token=refresh-old&client_id=public-test");
+        CHECK(form_body(8, "/token") ==
+              "grant_type=refresh_token&refresh_token=refresh-rotated&client_id=public-test");
         for (const auto &request : requests) {
             CHECK(request.find("client_secret") == std::string::npos);
             CHECK(request.find("organization_id") == std::string::npos);

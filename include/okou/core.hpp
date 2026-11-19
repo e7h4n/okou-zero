@@ -3,6 +3,7 @@
 #include "okou/build_config.hpp"
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <memory>
@@ -10,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace okou {
@@ -42,7 +44,10 @@ class HttpError : public std::runtime_error {
   public:
     long status;
     bool uncertain;
-    HttpError(long status, std::string message, bool uncertain = false);
+    int curl_code;
+    std::string oauth_error;
+    HttpError(long status, std::string message, bool uncertain = false, int curl_code = 0,
+              std::string_view oauth_error = "none");
 };
 class Http {
   public:
@@ -50,7 +55,7 @@ class Http {
     HttpResponse request(const std::string &method, const std::string &url,
                          const std::string &body = {}, const std::string &bearer = {},
                          const std::map<std::string, std::string> &headers = {},
-                         const std::vector<UploadPart> &parts = {});
+                         const std::vector<UploadPart> &parts = {}, std::FILE *output = nullptr);
     static std::string encode(const std::string &value);
 
   private:
@@ -139,6 +144,7 @@ class Client {
     Http &http_;
     Tokens tokens_;
     Json api(const std::string &method, const std::string &path, const Json &body = nullptr);
+    HttpResponse snapshot_response(const std::string &url, std::FILE *output = nullptr);
     Json snapshot(const std::string &url, bool ndjson);
 };
 class Realtime {

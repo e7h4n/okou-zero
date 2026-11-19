@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "okou/core.hpp"
+#include "okou/diagnostics.hpp"
 #include <algorithm>
 #include <ctime>
 #include <curl/curl.h>
@@ -87,7 +88,8 @@ HttpResponse post(Http &h, const std::string &url,
 }
 Json checked(const HttpResponse &r) {
     if (r.status < 200 || r.status >= 300)
-        throw HttpError(r.status, "OAuth request rejected");
+        throw HttpError(r.status, "OAuth request rejected", false, 0,
+                        diagnostics::response_oauth_error(r.body));
     auto j = r.json();
     if (!j.is_object())
         throw auth_error("Invalid OAuth response");
@@ -154,108 +156,140 @@ OAuth::OAuth(Config config, Http &http) : config_(std::move(config)), http_(http
 void OAuth::discover() {
     if (!metadata_.is_null())
         return;
-    if (config_.oauth_client_id.empty())
-        throw auth_error("Set OKOU_ZERO_OAUTH_CLIENT_ID to an approved Clerk public device client; "
-                         "see docs/auth-setup.md");
-    std::string issuer = config_.oauth_issuer;
-    if (issuer.empty()) {
-        std::string origin = config_.api_origin;
-        while (!origin.empty() && origin.back() == '/')
-            origin.pop_back();
-        auto resource =
-            checked(http_.request("GET", origin + "/.well-known/oauth-protected-resource/mcp"));
-        auto it = resource.find("authorization_servers");
-        if (it == resource.end() || !it->is_array() || it->empty() || !(*it)[0].is_string())
-            throw auth_error("No OAuth issuer advertised by resource metadata");
-        issuer = (*it)[0].get<std::string>();
-        if (resource.contains("resource") &&
-            str(resource, "resource", true) != config_.oauth_resource)
-            throw auth_error("OAuth resource metadata mismatch");
+    auto stage = config_.oauth_issuer.empty() ? diagnostics::Stage::resource_discovery
+                                              : diagnostics::Stage::issuer_discovery;
+    HttpResponse response;
+    try {
+        if (config_.oauth_client_id.empty())
+            throw auth_error(
+                "Set OKOU_ZERO_OAUTH_CLIENT_ID to an approved Clerk public device client; "
+                "see docs/auth-setup.md");
+        std::string issuer = config_.oauth_issuer;
+        if (issuer.empty()) {
+            std::string origin = config_.api_origin;
+            while (!origin.empty() && origin.back() == '/')
+                origin.pop_back();
+            response = http_.request("GET", origin + "/.well-known/oauth-protected-resource/mcp");
+            auto resource = checked(response);
+            auto it = resource.find("authorization_servers");
+            if (it == resource.end() || !it->is_array() || it->empty() || !(*it)[0].is_string())
+                throw auth_error("No OAuth issuer advertised by resource metadata");
+            issuer = (*it)[0].get<std::string>();
+            if (resource.contains("resource") &&
+                str(resource, "resource", true) != config_.oauth_resource)
+                throw auth_error("OAuth resource metadata mismatch");
+        }
+        stage = diagnostics::Stage::issuer_discovery;
+        // Issuer validation and requests must not inherit the resource response.
+        response = {};
+        secure_url(issuer);
+        if (issuer.find('?') != std::string::npos)
+            throw auth_error("OAuth issuer must not contain a query");
+        while (!issuer.empty() && issuer.back() == '/')
+            issuer.pop_back();
+        response = http_.request("GET", issuer + "/.well-known/openid-configuration");
+        if (response.status == 404) {
+            const auto slash = issuer.find('/', issuer.find("://") + 3);
+            const std::string origin = issuer.substr(0, slash),
+                              path = slash == std::string::npos ? "" : issuer.substr(slash);
+            response = {};
+            response =
+                http_.request("GET", origin + "/.well-known/oauth-authorization-server" + path);
+        }
+        auto m = checked(response);
+        auto advertised = str(m, "issuer", true);
+        while (!advertised.empty() && advertised.back() == '/')
+            advertised.pop_back();
+        if (advertised != issuer)
+            throw auth_error("OAuth metadata issuer mismatch");
+        secure_url(str(m, "token_endpoint", true));
+        secure_url(str(m, "device_authorization_endpoint", true));
+        if (m.contains("revocation_endpoint"))
+            secure_url(str(m, "revocation_endpoint", true));
+        if (m.contains("token_endpoint_auth_methods_supported") &&
+            (!m["token_endpoint_auth_methods_supported"].is_array() ||
+             std::find(m["token_endpoint_auth_methods_supported"].begin(),
+                       m["token_endpoint_auth_methods_supported"].end(),
+                       Json("none")) == m["token_endpoint_auth_methods_supported"].end()))
+            throw auth_error("OAuth provider does not advertise public clients");
+        if (m.contains("grant_types_supported") &&
+            (!m["grant_types_supported"].is_array() ||
+             std::find(m["grant_types_supported"].begin(), m["grant_types_supported"].end(),
+                       Json("urn:ietf:params:oauth:grant-type:device_code")) ==
+                 m["grant_types_supported"].end()))
+            throw auth_error(
+                "OAuth device grant unavailable; enable it for the public Clerk application");
+        // Keep config_ as the caller's binding, especially the empty issuer used
+        // for resource discovery. The validated resolved issuer lives in metadata_.
+        metadata_ = std::move(m);
+    } catch (const std::exception &error) {
+        diagnostics::log_error(stage, error, &response);
+        throw;
     }
-    secure_url(issuer);
-    if (issuer.find('?') != std::string::npos)
-        throw auth_error("OAuth issuer must not contain a query");
-    while (!issuer.empty() && issuer.back() == '/')
-        issuer.pop_back();
-    auto r = http_.request("GET", issuer + "/.well-known/openid-configuration");
-    if (r.status == 404) {
-        const auto slash = issuer.find('/', issuer.find("://") + 3);
-        const std::string origin = issuer.substr(0, slash),
-                          path = slash == std::string::npos ? "" : issuer.substr(slash);
-        r = http_.request("GET", origin + "/.well-known/oauth-authorization-server" + path);
-    }
-    auto m = checked(r);
-    auto advertised = str(m, "issuer", true);
-    while (!advertised.empty() && advertised.back() == '/')
-        advertised.pop_back();
-    if (advertised != issuer)
-        throw auth_error("OAuth metadata issuer mismatch");
-    secure_url(str(m, "token_endpoint", true));
-    secure_url(str(m, "device_authorization_endpoint", true));
-    if (m.contains("revocation_endpoint"))
-        secure_url(str(m, "revocation_endpoint", true));
-    if (m.contains("token_endpoint_auth_methods_supported") &&
-        (!m["token_endpoint_auth_methods_supported"].is_array() ||
-         std::find(m["token_endpoint_auth_methods_supported"].begin(),
-                   m["token_endpoint_auth_methods_supported"].end(),
-                   Json("none")) == m["token_endpoint_auth_methods_supported"].end()))
-        throw auth_error("OAuth provider does not advertise public clients");
-    if (m.contains("grant_types_supported") &&
-        (!m["grant_types_supported"].is_array() ||
-         std::find(m["grant_types_supported"].begin(), m["grant_types_supported"].end(),
-                   Json("urn:ietf:params:oauth:grant-type:device_code")) ==
-             m["grant_types_supported"].end()))
-        throw auth_error(
-            "OAuth device grant unavailable; enable it for the public Clerk application");
-    // Keep config_ as the caller's binding, especially the empty issuer used
-    // for resource discovery. The validated resolved issuer lives in metadata_.
-    metadata_ = std::move(m);
 }
 DeviceCode OAuth::begin() {
     discover();
-    auto j = checked(post(http_, str(metadata_, "device_authorization_endpoint", true),
-                          {{"client_id", config_.oauth_client_id},
-                           {"scope", config_.scopes},
-                           {"resource", config_.oauth_resource}}));
-    DeviceCode c;
-    c.device_code = str(j, "device_code", true);
-    c.user_code = str(j, "user_code", true);
-    c.verification_uri = str(j, "verification_uri", true);
-    c.verification_uri_complete = str(j, "verification_uri_complete");
-    secure_url(c.verification_uri);
-    if (!c.verification_uri_complete.empty())
-        secure_url(c.verification_uri_complete);
-    auto interval = number(j, "interval", 5), expiry = number(j, "expires_in", 600);
-    if (interval < 1 || interval > 3600 || expiry < 1 || expiry > 86400)
-        throw auth_error("Invalid OAuth device timing");
-    c.interval = static_cast<int>(interval);
-    c.expires_in = static_cast<int>(expiry);
-    return c;
+    HttpResponse response;
+    try {
+        response = post(http_, str(metadata_, "device_authorization_endpoint", true),
+                        {{"client_id", config_.oauth_client_id}, {"scope", config_.scopes}});
+        auto j = checked(response);
+        DeviceCode c;
+        c.device_code = str(j, "device_code", true);
+        c.user_code = str(j, "user_code", true);
+        c.verification_uri = str(j, "verification_uri", true);
+        c.verification_uri_complete = str(j, "verification_uri_complete");
+        secure_url(c.verification_uri);
+        if (!c.verification_uri_complete.empty())
+            secure_url(c.verification_uri_complete);
+        auto interval = number(j, "interval", 5), expiry = number(j, "expires_in", 0);
+        if (interval < 1 || interval > 3600 || expiry < 1 || expiry > 86400)
+            throw auth_error("Invalid OAuth device timing");
+        c.interval = static_cast<int>(interval);
+        c.expires_in = static_cast<int>(expiry);
+        return c;
+    } catch (const std::exception &error) {
+        diagnostics::log_error(diagnostics::Stage::device_authorization, error, &response);
+        throw;
+    }
 }
 PollResult OAuth::poll(const DeviceCode &code) {
     discover();
-    if (code.device_code.empty())
-        throw auth_error("Missing OAuth device code");
-    auto r = post(http_, str(metadata_, "token_endpoint", true),
-                  {{"grant_type", "urn:ietf:params:oauth:grant-type:device_code"},
-                   {"device_code", code.device_code},
-                   {"client_id", config_.oauth_client_id},
-                   {"resource", config_.oauth_resource}});
-    auto j = r.json();
-    if (!j.is_object())
-        throw auth_error("Invalid OAuth polling response");
-    auto e = str(j, "error");
-    if (r.status == 400 && e == "authorization_pending")
-        return {PollState::pending, {}};
-    if (r.status == 400 && e == "slow_down")
-        return {PollState::slow_down, {}};
-    if ((r.status == 400 || r.status == 403) && e == "access_denied")
-        return {PollState::denied, {}};
-    if (r.status == 400 && e == "expired_token")
-        return {PollState::expired, {}};
-    if (!e.empty() || r.status < 200 || r.status >= 300)
-        throw HttpError(r.status, "OAuth token polling rejected");
-    return {PollState::authorized, parse_tokens(j)};
+    auto stage = diagnostics::Stage::token_polling;
+    HttpResponse response;
+    try {
+        if (code.device_code.empty())
+            throw auth_error("Missing OAuth device code");
+        response = post(http_, str(metadata_, "token_endpoint", true),
+                        {{"grant_type", "urn:ietf:params:oauth:grant-type:device_code"},
+                         {"device_code", code.device_code},
+                         {"client_id", config_.oauth_client_id}});
+        const auto &r = response;
+        auto j = r.json();
+        if (!j.is_object())
+            throw auth_error("Invalid OAuth polling response");
+        auto e = str(j, "error");
+        if (r.status == 400 && e == "authorization_pending")
+            return {PollState::pending, {}};
+        if (r.status == 400 && e == "slow_down")
+            return {PollState::slow_down, {}};
+        if ((r.status == 400 || r.status == 403) && e == "access_denied") {
+            diagnostics::log_terminal(stage, r);
+            return {PollState::denied, {}};
+        }
+        if (r.status == 400 && e == "expired_token") {
+            diagnostics::log_terminal(stage, r);
+            return {PollState::expired, {}};
+        }
+        if (!e.empty() || r.status < 200 || r.status >= 300)
+            throw HttpError(r.status, "OAuth token polling rejected", false, 0,
+                            diagnostics::oauth_error_code(j));
+        stage = diagnostics::Stage::token_validation;
+        return {PollState::authorized, parse_tokens(j)};
+    } catch (const std::exception &error) {
+        diagnostics::log_error(stage, error, &response);
+        throw;
+    }
 }
 Tokens OAuth::parse_tokens(const Json &body, const Tokens &previous) const {
     try {
@@ -315,14 +349,25 @@ Tokens OAuth::refresh(const Tokens &previous) {
     discover();
     if (previous.refresh_token.empty())
         throw HttpError(401, "No refresh token; authorize device again");
+    auto stage = diagnostics::Stage::refresh;
+    HttpResponse response;
     try {
-        return parse_tokens(checked(post(http_, str(metadata_, "token_endpoint", true),
-                                         {{"grant_type", "refresh_token"},
-                                          {"refresh_token", previous.refresh_token},
-                                          {"client_id", config_.oauth_client_id},
-                                          {"resource", config_.oauth_resource}})),
-                            previous);
+        response = post(http_, str(metadata_, "token_endpoint", true),
+                        {{"grant_type", "refresh_token"},
+                         {"refresh_token", previous.refresh_token},
+                         {"client_id", config_.oauth_client_id}});
+        auto body = checked(response);
+        stage = diagnostics::Stage::token_validation;
+        return parse_tokens(body, previous);
     } catch (...) {
+        // Observe the original error before the existing reauthorization barrier
+        // masks it. Diagnostic failures must never affect the barrier.
+        try {
+            throw;
+        } catch (const std::exception &error) {
+            diagnostics::log_error(stage, error, &response);
+        } catch (...) {
+        }
         // The provider may have rotated the token even when its response was lost.
         // Persist a token-free barrier so reconnects and process restarts cannot
         // automatically reuse an uncertain refresh generation. Fresh login replaces it.
@@ -368,12 +413,17 @@ void OAuth::logout(const Tokens &t) {
         if (!metadata_.contains("revocation_endpoint"))
             return;
         const auto token = t.refresh_token.empty() ? t.access_token : t.refresh_token;
-        if (!token.empty())
-            (void)post(
+        if (!token.empty()) {
+            const auto response = post(
                 http_, str(metadata_, "revocation_endpoint", true),
                 {{"token", token},
                  {"token_type_hint", t.refresh_token.empty() ? "access_token" : "refresh_token"},
                  {"client_id", config_.oauth_client_id}});
+            if (response.status < 200 || response.status >= 300)
+                diagnostics::log_terminal(diagnostics::Stage::logout_revocation, response);
+        }
+    } catch (const std::exception &error) {
+        diagnostics::log_error(diagnostics::Stage::logout_revocation, error);
     } catch (...) { /* best effort revocation; never expose provider bodies */
     }
 }

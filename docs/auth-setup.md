@@ -79,6 +79,8 @@ Use a separate `data_dir` per configuration if you need to retain multiple grant
 
 ## Device and token lifecycle
 
+The Clerk public-client flow uses form-encoded POSTs. Device authorization sends `client_id` and the configured `scope`. Polling sends `client_id`, `device_code`, and `grant_type=urn:ietf:params:oauth:grant-type:device_code`. Refresh sends `client_id`, `refresh_token`, and `grant_type=refresh_token`. These requests follow Clerk's examples and omit `resource`. The configured resource still identifies the API in discovery and local credential binding. Verify the audience on a newly issued token during live acceptance because the documented device flow does not specify how to request a resource audience.
+
 `begin()` returns a private `device_code`, public user code and verification URI(s). Show only the user code and verification links, never the device code or tokens. Main owns cancellation and scheduling: wait at least `interval` before **each** poll, increase it by at least five seconds on `slow_down`, stop at expiry, denial or cancellation, and avoid overlapping polls. `poll()` returns `pending`, `slow_down`, `authorized`, `denied`, or `expired`; other provider errors become sanitized errors without `error_description`.
 
 After authorization or refresh, main saves the returned Tokens. Refresh rotates the refresh token when provided, retaining the previous one when omitted. Do not automatically retry an interrupted refresh: a refresh token may have rotated even when the response was lost. A failed token request writes a token-free reauthorization barrier before returning; subsequent refresh attempts and process restarts cannot reuse that generation. A fresh device authorization replaces the barrier. Discovery failures before a token request do not invalidate a grant. Access JWT payloads are decoded **without verification** solely for display, local expiry scheduling and realtime channel addressing. The API remains the authority. A user/org-bound token is required locally; load re-derives claims from the access token rather than trusting editable persisted user/org fields. Persisted expiry can only shorten the JWT expiry.
@@ -92,6 +94,20 @@ Logout removes/fsyncs local credentials **before** best-effort revocation. Cance
 - Connect timeout 10 seconds, total timeout 60 seconds, low-speed timeout 20 seconds, cancellation via libcurl progress callback. Gzip is transparently decoded. Maximum decoded response body 16 MiB and headers 64 KiB.
 - HTTP 2xx/3xx/4xx return `HttpResponse`; **every caller must check status** before interpreting a successful API response. OAuth reads the standard 400 error field. Network/cancellation/response-bound errors and 5xx throw sanitized `HttpError`. Non-read requests interrupted after transport starts, or receiving 5xx, are conservatively `uncertain=true`; preflight cancellation is not uncertain. No request is automatically replayed.
 - Errors contain only fixed descriptions/status, never request URL, body, token, provider error description or raw response. Debug/verbose curl logging is not enabled.
+
+### Sanitized failure diagnostics
+
+The client writes bounded, single-line structured failure records to **stderr**. When launched by the standard launcher service, these use the launcher's existing journal stream; the client creates no log files, telemetry service, network request or new retention policy. For example:
+
+```sh
+journalctl --user -u APPLaunch.service --since '10 minutes ago' --no-pager
+```
+
+Records identify the failed local operation, HTTP status and numeric libcurl error code when available, send uncertainty, and an allowlisted OAuth protocol error. Unknown provider codes and arbitrary exception text become fixed classifications rather than being copied into logs. HTTP status zero means no usable HTTP status was available, not that the provider returned a status of zero. A libcurl code is a transport diagnostic, not proof of a specific server-side cause.
+
+Never enable verbose curl or request/response dumps to investigate login. These diagnostics exclude URLs and query strings, request/response bodies, headers, provider descriptions, tokens, device/user codes, verification links, client/user/organization identifiers, messages, drafts and audio. Normal authorization-pending and slow-down polling stays quiet. Logging does not change authorization, polling intervals, validation, refresh barriers or uncertain-send handling, and never retries an operation. A stage-specific record and an application-boundary record can describe the same exception; two such records do not imply two network requests.
+
+Older installed versions cannot recover details they never recorded. After an approved diagnostic build is installed, reproduce the failure only with explicit operator approval; adding diagnostics or opening a PR does not authorize another login, device installation or service change.
 
 ### Offline fixtures only
 

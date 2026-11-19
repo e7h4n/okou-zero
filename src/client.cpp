@@ -9,6 +9,7 @@
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <set>
+#include <sqlite3.h>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -172,6 +173,164 @@ Json parsed(const std::string &s) {
         invalid();
     }
 }
+// /tmp is a RAM-backed filesystem on Cardputer. Keep refresh work on disk.
+class RefreshFile {
+    char path_[sizeof("/var/tmp/okou-zero-refresh-XXXXXX")] = "/var/tmp/okou-zero-refresh-XXXXXX";
+    int fd_ = -1;
+
+  public:
+    RefreshFile() {
+        fd_ = ::mkostemp(path_, O_CLOEXEC);
+        if (fd_ < 0)
+            throw std::runtime_error("Cannot create temporary chat refresh file");
+    }
+    RefreshFile(const RefreshFile &) = delete;
+    RefreshFile &operator=(const RefreshFile &) = delete;
+    ~RefreshFile() {
+        if (fd_ >= 0)
+            ::close(fd_);
+        if (path_[0])
+            ::unlink(path_);
+    }
+    const char *path() const {
+        return path_;
+    }
+    std::FILE *stream() {
+        auto *file = ::fdopen(fd_, "w+b");
+        if (!file)
+            throw std::runtime_error("Cannot open temporary chat snapshot");
+        fd_ = -1;
+        if (::unlink(path_) == 0)
+            path_[0] = '\0';
+        return file;
+    }
+};
+
+class ThreadIndex {
+    RefreshFile file_;
+    std::unique_ptr<sqlite3, decltype(&sqlite3_close)> db_{nullptr, sqlite3_close};
+    using Statement = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
+
+    static void check(int code) {
+        if (code != SQLITE_OK)
+            throw std::runtime_error("Cannot use temporary chat index");
+    }
+    Statement statement(const char *sql, std::initializer_list<std::string_view> args = {}) {
+        sqlite3_stmt *raw = nullptr;
+        const auto code = sqlite3_prepare_v2(db_.get(), sql, -1, &raw, nullptr);
+        Statement stmt(raw, sqlite3_finalize);
+        check(code);
+        int i = 1;
+        for (const auto arg : args)
+            check(sqlite3_bind_text(stmt.get(), i++, arg.data(), static_cast<int>(arg.size()),
+                                    SQLITE_TRANSIENT));
+        return stmt;
+    }
+    static bool row(Statement &stmt) {
+        const auto code = sqlite3_step(stmt.get());
+        if (code == SQLITE_ROW)
+            return true;
+        if (code != SQLITE_DONE)
+            check(code);
+        return false;
+    }
+    static Json body(Statement &stmt) {
+        const auto *value = reinterpret_cast<const char *>(sqlite3_column_text(stmt.get(), 0));
+        if (!value)
+            throw std::runtime_error("Cannot read temporary chat index");
+        return parsed(value);
+    }
+
+  public:
+    ThreadIndex() {
+        sqlite3 *raw = nullptr;
+        const auto code = sqlite3_open_v2(file_.path(), &raw, SQLITE_OPEN_READWRITE, nullptr);
+        db_.reset(raw);
+        check(code);
+        check(sqlite3_exec(db_.get(),
+                           "PRAGMA cache_size=-512; PRAGMA journal_mode=OFF;"
+                           "CREATE TABLE threads(id TEXT PRIMARY KEY, body TEXT NOT NULL,"
+                           " sort_at TEXT NOT NULL, visible INTEGER NOT NULL) WITHOUT ROWID;"
+                           "CREATE INDEX thread_order ON threads(visible,sort_at DESC,id);"
+                           "BEGIN",
+                           nullptr, nullptr, nullptr));
+    }
+    void clear() {
+        auto stmt = statement("DELETE FROM threads");
+        row(stmt);
+    }
+    void erase(const std::string &id) {
+        auto stmt = statement("DELETE FROM threads WHERE id=?1", {id});
+        row(stmt);
+    }
+    Json find(const std::string &id) {
+        auto stmt = statement("SELECT body FROM threads WHERE id=?1", {id});
+        return row(stmt) ? body(stmt) : Json(nullptr);
+    }
+    void save(const std::string &id, const Json &value, bool replace) {
+        const auto json = value.dump();
+        const auto sort_at = str(value, "sortAt");
+        const bool visible = !flag(value, "archived") && !flag(value, "hidden");
+        auto stmt = statement(
+            replace ? "INSERT OR REPLACE INTO threads VALUES(?1,?2,?3,CAST(?4 AS INTEGER))"
+                    : "INSERT INTO threads VALUES(?1,?2,?3,CAST(?4 AS INTEGER))",
+            {id, json, sort_at, visible ? "1" : "0"});
+        row(stmt);
+    }
+    template <typename Consume> void visible(Consume consume) {
+        const auto limit = std::to_string(max_visible);
+        auto stmt = statement(
+            "SELECT body FROM threads WHERE visible=1 ORDER BY sort_at DESC,id LIMIT ?1", {limit});
+        while (row(stmt))
+            consume(body(stmt));
+    }
+};
+
+class SnapshotSpool {
+    RefreshFile temp_;
+    std::unique_ptr<std::FILE, decltype(&std::fclose)> file_{temp_.stream(), std::fclose};
+
+  public:
+    std::FILE *file() {
+        return file_.get();
+    }
+    template <typename Consume> Json read(Consume consume) {
+        if (std::fflush(file()) != 0 || std::fseek(file(), 0, SEEK_SET) != 0)
+            throw std::runtime_error("Cannot read temporary chat snapshot");
+
+        using Event = Json::parse_event_t;
+        bool next_is_threads = false, in_threads = false, have_threads = false;
+        auto root = Json::parse(file(), [&](int depth, Event event, Json &value) {
+            if (depth == 1 && event == Event::key) {
+                next_is_threads = value == "chatThreads";
+                return next_is_threads || value == "url" || value == "latestSeqId" ||
+                       value == "latestEventId";
+            }
+            if (depth == 1 && event == Event::array_start && next_is_threads) {
+                if (have_threads)
+                    invalid();
+                have_threads = in_threads = true;
+            }
+            if (depth == 1 && event == Event::array_end)
+                in_threads = false;
+            if (depth == 2 && in_threads) {
+                if (event == Event::value || event == Event::array_start)
+                    invalid();
+                if (event == Event::object_end) {
+                    consume(value);
+                    return false;
+                }
+            }
+            return true;
+        });
+        if (!root.is_object() ||
+            (root.contains("chatThreads") &&
+             (!have_threads || !root["chatThreads"].is_array() || !root["chatThreads"].empty())))
+            invalid();
+        return root;
+    }
+};
+
 void success(const HttpResponse &r) {
     if (r.status < 200 || r.status >= 300)
         throw HttpError(r.status, "HTTP request failed (" + std::to_string(r.status) + ")",
@@ -442,7 +601,7 @@ Json Client::api(const std::string &method, const std::string &path, const Json 
         return nullptr;
     return parsed(r.body);
 }
-Json Client::snapshot(const std::string &url, bool ndjson) {
+HttpResponse Client::snapshot_response(const std::string &url, std::FILE *output) {
     // Signed URL is passed byte-for-byte. No bearer or client headers, no redirects (Http).
     const char *fixture = std::getenv("OKOU_ZERO_TEST_ALLOW_LOOPBACK_HTTP");
     bool test_loopback =
@@ -456,8 +615,12 @@ Json Client::snapshot(const std::string &url, bool ndjson) {
     if (authority.empty() || authority.find('@') != std::string::npos ||
         url.find('#') != std::string::npos || url.find_first_of("\r\n\\") != std::string::npos)
         throw std::runtime_error("Unsafe snapshot storage URL");
-    auto r = http_.request("GET", url);
+    auto r = http_.request("GET", url, {}, {}, {}, {}, output);
     success(r);
+    return r;
+}
+Json Client::snapshot(const std::string &url, bool ndjson) {
+    auto r = snapshot_response(url);
     if (!ndjson)
         return parsed(r.body);
     if (!r.body.empty() && r.body.back() != '\n')
@@ -488,33 +651,43 @@ Json Client::indicators() {
 }
 ListState Client::list(bool include_indicators) {
     ListState out;
-    std::map<std::string, Json> threads;
+    ThreadIndex threads;
+    auto index = [&](const Json &item) {
+        auto id = str(item, "id"), agent_id = str(item, "agentId"),
+             project_id = str(item, "projectId");
+        if (!is_uuid(id) || !is_uuid(agent_id) || (!project_id.empty() && !is_uuid(project_id)))
+            invalid();
+        threads.save(id,
+                     {{"id", id},
+                      {"agentId", agent_id},
+                      {"projectId", project_id},
+                      {"title", clipped(str(item, "title"), 512)},
+                      {"sortAt", clipped(str(item, "sortAt"), 64)},
+                      {"archived", flag(item, "archived")},
+                      {"hidden", flag(item, "hidden")},
+                      {"muted", flag(item, "muted")}},
+                     false);
+    };
     for (int attempt = 0; attempt < 2; ++attempt) {
-        threads.clear();
-        auto s = api("GET", "/api/chat-threads/snapshot");
+        if (attempt)
+            threads.clear();
+        Json s;
+        {
+            SnapshotSpool spool;
+            success(http_.request("GET", config_.api_origin + "/api/chat-threads/snapshot", {},
+                                  tokens_.access_token, {}, {}, spool.file()));
+            s = spool.read(index);
+        }
         if (s.contains("url") == s.contains("chatThreads"))
             invalid();
         auto n = seq(s, "latestSeqId");
         auto eid = str(s, "latestEventId");
         cursor(n, eid);
-        auto projection = s.contains("url") ? snapshot(str(s, "url"), false) : s;
-        auto items = projection.at("chatThreads");
-        if (!items.is_array() || items.size() > 4096)
-            invalid();
-        for (const auto &item : items) {
-            auto id = str(item, "id"), agent_id = str(item, "agentId"),
-                 project_id = str(item, "projectId");
-            if (!is_uuid(id) || !is_uuid(agent_id) ||
-                (!project_id.empty() && !is_uuid(project_id)) || threads.count(id))
+        if (s.contains("url")) {
+            SnapshotSpool spool;
+            snapshot_response(str(s, "url"), spool.file());
+            if (!spool.read(index).contains("chatThreads"))
                 invalid();
-            threads[id] = {{"id", id},
-                           {"agentId", agent_id},
-                           {"projectId", project_id},
-                           {"title", clipped(str(item, "title"), 512)},
-                           {"sortAt", clipped(str(item, "sortAt"), 64)},
-                           {"archived", flag(item, "archived")},
-                           {"hidden", flag(item, "hidden")},
-                           {"muted", flag(item, "muted")}};
         }
         std::set<std::string> seen;
         if (!eid.empty())
@@ -541,12 +714,12 @@ ListState Client::list(bool include_indicators) {
                         threads.erase(t);
                         continue;
                     }
-                    if (!threads.count(t)) {
+                    auto v = threads.find(t);
+                    if (v.is_null()) {
                         if (kind != "created")
                             continue;
-                        threads[t] = {{"id", t}, {"archived", false}};
+                        v = {{"id", t}, {"archived", false}};
                     }
-                    auto &v = threads[t];
                     if (e.contains("title"))
                         v["title"] = clipped(str(e, "title"), 512);
                     for (const char *k : {"agentId", "projectId", "reassignedAgentId"})
@@ -568,8 +741,7 @@ ListState Client::list(bool include_indicators) {
                         v["archived"] = false;
                     if (kind == "created" || kind == "sort_touched")
                         v["sortAt"] = clipped(str(e, "createdAt"), 64);
-                    if (threads.size() > 4096)
-                        invalid();
+                    threads.save(t, v, true);
                 }
                 if (!more) {
                     done = true;
@@ -585,16 +757,8 @@ ListState Client::list(bool include_indicators) {
             invalid();
         break;
     }
-    std::vector<Json> visible;
-    for (const auto &pair : threads)
-        if (!flag(pair.second, "archived") && !flag(pair.second, "hidden"))
-            visible.push_back(pair.second);
-    std::sort(visible.begin(), visible.end(),
-              [](const Json &a, const Json &b) { return str(a, "sortAt") > str(b, "sortAt"); });
     auto values = include_indicators ? indicators().at("threads") : Json::object();
-    for (const auto &v : visible) {
-        if (out.threads.size() == max_visible)
-            break;
+    threads.visible([&](const Json &v) {
         Thread t;
         t.id = str(v, "id");
         t.title = str(v, "title");
@@ -605,7 +769,7 @@ ListState Client::list(bool include_indicators) {
         t.active = state == "active";
         t.unread = state == "unread" && !t.muted;
         out.threads.push_back(std::move(t));
-    }
+    });
     auto projects = api("GET", "/api/projects").at("projects");
     if (!projects.is_array() || projects.size() > 4096)
         invalid();

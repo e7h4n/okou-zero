@@ -1,3 +1,4 @@
+#include "okou/diagnostics.hpp"
 #include "okou/dictation.hpp"
 #include "okou/ui.hpp"
 #include "update_process.hpp"
@@ -68,6 +69,7 @@ class Engine {
         }
     }
     void error(const std::exception &ex) {
+        diagnostics::log_error(diagnostics::Stage::application, ex);
         const auto *http = dynamic_cast<const HttpError *>(&ex);
         long status = http ? http->status : 0;
         std::string text = status == 401   ? "Sign-in expired; sign in again"
@@ -259,13 +261,17 @@ class Engine {
             while (!stopping_ && std::chrono::steady_clock::now() < deadline) {
                 {
                     std::unique_lock<std::mutex> lock(mutex_);
-                    if (cv_.wait_for(lock, std::chrono::seconds(interval),
-                                     [this] { return stopping_.load(); }))
+                    auto next_poll =
+                        std::chrono::steady_clock::now() + std::chrono::seconds(interval);
+                    if (cv_.wait_until(lock, std::min(next_poll, deadline),
+                                       [this] { return stopping_.load(); }))
                         return;
                 }
                 PollResult result;
                 {
                     std::lock_guard<std::mutex> guard(s->io);
+                    if (std::chrono::steady_clock::now() >= deadline)
+                        break;
                     result = s->auth.poll(code);
                 }
                 if (result.state == PollState::pending)
@@ -785,7 +791,8 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Update installed; reopen Okou from the launcher");
         }
         return 0;
-    } catch (const std::exception &) {
+    } catch (const std::exception &error) {
+        diagnostics::log_error(diagnostics::Stage::startup, error);
         std::cerr
             << "Okou Zero could not start. Check configuration and display/input permissions.\n";
         return 1;

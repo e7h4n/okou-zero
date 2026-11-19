@@ -423,7 +423,7 @@ struct Realtime::Impl {
                 // Ably RSA3c specifies accessToken on the initial WebSocket URL.
                 // No URL/header/error/traffic logging is registered. Never expose getUrl().
                 std::string url = "wss://realtime.ably.io/"
-                                  "?v=1.2&format=json&echo=false&heartbeats=true&clientId=" +
+                                  "?v=6&format=json&echo=false&heartbeats=true&clientId=" +
                                   Http::encode(user) + "&accessToken=" + Http::encode(token);
                 const auto key = realtime_detail::text(state, "key");
                 if (!key.empty())
