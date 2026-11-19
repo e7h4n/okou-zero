@@ -5,6 +5,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "src/misc/cache/instance/lv_image_cache.h"
+#include "src/misc/lv_text_private.h"
 #include <hb-ft.h>
 
 namespace okou {
