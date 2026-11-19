@@ -346,20 +346,31 @@ void UI::render() {
     else if (page == Page::settings)
         title = "Okou / workspace";
     auto heading = split_emoji_title(title);
+    const int heading_end = recording ? 221 : 251;
     if (emoji_->draw(header_, heading.first, 8, 3, 16))
-        label(header_, heading.second, 29, 3, 219, ink, 20);
+        label(header_, heading.second, 29, 3, heading_end - 29, ink, 20);
     else
-        label(header_, title, 8, 3, 240, ink, 20);
-    label(header_,
-          recording ? "REC"
-          : busy    ? "..."
-          : live    ? "Live"
-                    : "Offline",
-          257, 3, 58,
-          recording ? 0xa8342b
-          : live    ? green
-                    : muted,
-          20);
+        label(header_, title, 8, 3, heading_end - 8, ink, 20);
+    if (recording)
+        label(header_, "REC", 224, 3, 28, 0xa8342b, 20);
+    const auto power_color = battery.charging                                ? green
+                             : battery.percent >= 0 && battery.percent <= 15 ? 0xa8342b
+                                                                             : muted;
+    if (battery.charging) {
+        auto *bolt = label(header_, LV_SYMBOL_CHARGE, 252, 4, 12, power_color, 16);
+        lv_obj_set_style_text_font(bolt, &lv_font_montserrat_12, 0);
+    }
+    const char *level = battery.percent >= 90   ? LV_SYMBOL_BATTERY_FULL
+                        : battery.percent >= 65 ? LV_SYMBOL_BATTERY_3
+                        : battery.percent >= 40 ? LV_SYMBOL_BATTERY_2
+                        : battery.percent >= 15 ? LV_SYMBOL_BATTERY_1
+                                                : LV_SYMBOL_BATTERY_EMPTY;
+    auto *icon = label(header_, level, 266, 4, 17, power_color, 16);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_12, 0);
+    auto percent = battery.percent >= 0 ? std::to_string(battery.percent) + "%" : "--%";
+    auto *value = label(header_, percent, 283, 4, 32, power_color, 16);
+    lv_obj_set_style_text_font(value, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
     std::string help;
     if (page == Page::setup) {
         label(body_, "Connect your Okou OAuth app", 8, 4, 304, ink);
@@ -507,7 +518,7 @@ void UI::demo(const std::string &screen) {
                     {"thread_4", "Review the weekly update", "project_work", "agent_demo", false,
                      false, false, true}};
     org_id = "Demo workspace";
-    live = true;
+    battery = {72, screen != "projects"};
     busy = false;
     submitting = recording = voice_pending = uncertain = voice_working = false;
     status = "Demo - no account or network";
@@ -515,7 +526,6 @@ void UI::demo(const std::string &screen) {
         page = Page::projects;
     else if (screen == "login") {
         page = Page::login;
-        live = false;
         user_code = "DEMO-CODE";
         verification_uri = "https://example.invalid/activate";
         status = "Demo only - this is not a real sign-in code";

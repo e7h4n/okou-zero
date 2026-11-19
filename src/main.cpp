@@ -95,7 +95,6 @@ class Engine {
             realtime_->stop();
             realtime_.reset();
         }
-        emit([](UI &ui) { ui.live = false; });
     }
     void start_realtime(const std::shared_ptr<Session> &s) {
         stop_realtime();
@@ -120,15 +119,9 @@ class Engine {
                 if (!current || current != std::atomic_load(&session_) || stopping_)
                     return;
                 if (name == "connection:connected")
-                    emit([](UI &ui) {
-                        ui.live = true;
-                        ui.status = "Connected";
-                    });
+                    emit([](UI &ui) { ui.status = "Connected"; });
                 else if (name == "connection:disconnected")
-                    emit([](UI &ui) {
-                        ui.live = false;
-                        ui.status = "Reconnecting...";
-                    });
+                    emit([](UI &ui) { ui.status = "Reconnecting..."; });
                 if (name == "connection:gap") {
                     refresh(false);
                     refresh_indicators();
@@ -693,6 +686,7 @@ int main(int argc, char **argv) {
         }
         auto last = std::chrono::steady_clock::now();
         auto start = last;
+        auto next_battery_read = last;
         bool dirty = true, running = true, restart = false;
         UpdateProcess updater;
         if (!demo)
@@ -702,6 +696,15 @@ int main(int argc, char **argv) {
             lv_tick_inc(static_cast<std::uint32_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count()));
             last = now;
+            if (!demo && now >= next_battery_read) {
+                next_battery_read = now + std::chrono::seconds(5);
+                auto battery = read_battery_status();
+                if (battery.percent != ui.battery.percent ||
+                    battery.charging != ui.battery.charging) {
+                    ui.battery = battery;
+                    dirty = true;
+                }
+            }
             if (engine && engine->drain(ui))
                 dirty = true;
             if (updater.poll()) {

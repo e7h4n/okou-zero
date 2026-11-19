@@ -28,7 +28,8 @@ class UI {
     std::string user_code, verification_uri;
     std::string project_filter;
     std::string update_message;
-    bool busy = false, recording = false, live = false, uncertain = false;
+    BatteryStatus battery;
+    bool busy = false, recording = false, uncertain = false;
     bool submitting = false, voice_pending = false, voice_working = false;
     int selected = 0;
     explicit UI(lv_display_t *display);
