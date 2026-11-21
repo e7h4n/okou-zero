@@ -473,7 +473,9 @@ class Engine {
                 if (audio_) {
                     auto pcm = audio_->finish();
                     audio_.reset();
-                    dictation_ = std::make_unique<Dictation>(thread_id, std::move(pcm));
+                    const auto mode =
+                        voice_send_direct_ ? Dictation::Mode::push_to_talk : Dictation::Mode::draft;
+                    dictation_ = std::make_unique<Dictation>(thread_id, std::move(pcm), mode);
                 }
                 if (!dictation_) {
                     emit([](UI &ui) {
