@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include "okou/core.hpp"
 #include "okou/dictation.hpp"
 
 #include <algorithm>
@@ -73,31 +72,6 @@ void retry_segment() {
     check(d.thread_id() == "origin-thread", "Origin remains available for draft insertion");
     check(d.process(transcribe, polish).empty() && calls == 4 && polish_calls == 1,
           "Success cannot replay callbacks");
-}
-void shorten_rejected_voice_segment() {
-    const auto pcm = audio(16 * rate);
-    okou::Dictation d("thread", pcm, okou::Dictation::Mode::push_to_talk);
-    const std::size_t start[] = {0, 6, 6, 9, 12};
-    const std::size_t end[] = {8, 14, 11, 14, 16};
-    unsigned calls = 0;
-    auto result = d.process(
-        [&](const auto &slice, const auto &previous, double overlap) {
-            const auto index = calls++;
-            check(index < 5, "Retry stays bounded");
-            check(slice == std::vector<std::int16_t>(pcm.begin() + start[index] * rate,
-                                                     pcm.begin() + end[index] * rate),
-                  "Only the rejected segment is retried, then audio advances without gaps");
-            check(overlap == (index == 0 ? 0.0 : 2.0), "Context overlap preserved");
-            check(previous == (index == 0 ? "" : "spoken"), "Successful context preserved");
-            if (index == 1)
-                throw okou::HttpError(502, "Provider output unusable");
-            return std::string("spoken");
-        },
-        [](const auto &segments) {
-            check(segments.size() == 4, "One entry for each successful segment");
-            return std::string("joined");
-        });
-    check(result == "joined" && calls == 5 && !d.pending(), "Voice finishes after fallback");
 }
 void retry_polish() {
     okou::Dictation d("thread", audio(16 * rate));
@@ -241,7 +215,6 @@ void explicit_discard_and_missing_callbacks() {
 int main() {
     try {
         retry_segment();
-        shorten_rejected_voice_segment();
         retry_polish();
         windows_and_bounds();
         silence_and_empty_polish();

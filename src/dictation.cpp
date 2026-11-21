@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include "okou/dictation.hpp"
-#include "okou/core.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -11,8 +10,7 @@ namespace {
 constexpr std::size_t rate = 16000;
 constexpr std::size_t window = 15 * rate;
 constexpr std::size_t overlap = 2 * rate;
-constexpr std::size_t voice_window = 8 * rate;
-constexpr std::size_t voice_fallback = 5 * rate;
+constexpr std::size_t step = window - overlap;
 constexpr std::size_t max_samples = 10 * 60 * rate;
 
 // Best-effort erasure of our owned buffers, not copies owned by callers/callbacks.
@@ -41,9 +39,8 @@ struct Processing {
 };
 } // namespace
 
-Dictation::Dictation(std::string thread_id, std::vector<std::int16_t> pcm, Mode mode)
-    : thread_id_(std::move(thread_id)), pcm_(std::move(pcm)),
-      window_samples_(mode == Mode::push_to_talk ? voice_window : window), pending_(!pcm_.empty()) {
+Dictation::Dictation(std::string thread_id, std::vector<std::int16_t> pcm)
+    : thread_id_(std::move(thread_id)), pcm_(std::move(pcm)), pending_(!pcm_.empty()) {
     if (pcm_.size() > max_samples) {
         erase(pcm_);
         throw std::runtime_error("Dictation exceeds the ten-minute limit");
@@ -99,13 +96,11 @@ std::string Dictation::process(Transcribe transcribe, Polish polish, Cancelled c
     check_cancelled(cancelled);
     // Allocate bookkeeping before uploads, so committing a successful callback
     // cannot fail allocation and accidentally cause that window to be retried.
-    const auto minimum_window = window_samples_ == window ? window : voice_fallback;
-    const auto minimum_step = minimum_window - overlap;
-    segments_.reserve(1 + (pcm_.size() + minimum_step - 1) / minimum_step);
+    segments_.reserve(1 + (max_samples - window + step - 1) / step);
     while (next_offset_ < pcm_.size()) {
         check_cancelled(cancelled);
         const auto start = next_offset_;
-        const auto end = std::min(start + window_samples_, pcm_.size());
+        const auto end = std::min(start + window, pcm_.size());
         // All of this suffix has already appeared in the preceding window.
         if (start != 0 && end - start <= overlap) {
             next_offset_ = pcm_.size();
@@ -119,16 +114,6 @@ std::string Dictation::process(Transcribe transcribe, Polish polish, Cancelled c
         try {
             check_cancelled(cancelled);
             transcript = transcribe(slice.pcm, previous, start == 0 ? 0.0 : 2.0);
-        } catch (const HttpError &error) {
-            check_cancelled(cancelled);
-            if (error.status == 502 && window_samples_ == voice_window &&
-                slice.pcm.size() > voice_fallback) {
-                // No transcript was committed. Reprocess from the same offset
-                // with less audio, retaining the previous successful context.
-                window_samples_ = voice_fallback;
-                continue;
-            }
-            throw std::runtime_error("Dictation transcription failed; retry explicitly");
         } catch (...) {
             check_cancelled(cancelled);
             throw std::runtime_error("Dictation transcription failed; retry explicitly");
@@ -141,7 +126,7 @@ std::string Dictation::process(Transcribe transcribe, Polish polish, Cancelled c
         }
         segments_.push_back(std::move(transcript));
         // Commit progress only after a callback has returned successfully.
-        next_offset_ = end == pcm_.size() ? end : end - overlap;
+        next_offset_ = end == pcm_.size() ? end : start + step;
     }
     check_cancelled(cancelled);
     std::string result;

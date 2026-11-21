@@ -11,7 +11,7 @@ namespace okou {
 
 // In-memory recovery only. Serialize access, including discard(); cancellation
 // from another thread should be exposed through the Cancelled callback instead.
-// Processing starts on finish or explicit retry. Push-to-talk may shorten a rejected segment.
+// Each process() invocation is an explicit finish/retry, never an automatic retry.
 class Dictation {
   public:
     using Transcribe =
@@ -19,8 +19,7 @@ class Dictation {
     using Polish = std::function<std::string(const std::vector<std::string> &)>;
     using Cancelled = std::function<bool()>;
 
-    enum class Mode { draft, push_to_talk };
-    Dictation(std::string thread_id, std::vector<std::int16_t> pcm, Mode mode = Mode::draft);
+    Dictation(std::string thread_id, std::vector<std::int16_t> pcm);
     ~Dictation();
     Dictation(const Dictation &) = delete;
     Dictation &operator=(const Dictation &) = delete;
@@ -47,7 +46,6 @@ class Dictation {
     std::string thread_id_;
     std::vector<std::int16_t> pcm_;
     std::vector<std::string> segments_;
-    std::size_t window_samples_;
     std::size_t next_offset_ = 0;
     bool pending_ = false;
     bool processing_ = false;
