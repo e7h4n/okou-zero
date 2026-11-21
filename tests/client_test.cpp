@@ -462,10 +462,7 @@ void bad_history_tests() {
     }
 }
 Json metadata() {
-    return {{"id", thread_id},
-            {"agentId", agent},
-            {"computerUseHostId", nullptr},
-            {"cloudBrowserEnabled", true}};
+    return {{"id", thread_id}, {"computerUseHostId", nullptr}, {"cloudBrowserEnabled", true}};
 }
 okou::Thread thread() {
     okou::Thread t;
@@ -486,7 +483,7 @@ void send_test() {
                         sent_id = j.at("clientEventId");
                         sort = j.at("chatThreadSortEventId");
                         check(j.at("prompt") == prompt && j.at("threadId") == thread_id &&
-                                  j.at("agentId") == agent,
+                                  !j.contains("agentId"),
                               "send canonical body");
                         check(j["userMessage"]["version"] == 1 &&
                                   j["userMessage"]["parts"][0]["type"] == "text" &&
