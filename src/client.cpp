@@ -11,10 +11,15 @@
 #include <set>
 #include <sqlite3.h>
 #include <sstream>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 namespace okou {
+namespace detail {
+Json read_private(const std::string &);
+void write_private(const std::string &, const Json &);
+} // namespace detail
 namespace {
 constexpr std::size_t max_events = 8192, max_visible = 128, max_messages = 200;
 [[noreturn]] void invalid() {
@@ -346,11 +351,12 @@ void success(const HttpResponse &r) {
                         r.status >= 500);
 }
 // Never persist prompts or tokens. Identity records are account/origin scoped.
-std::string pending_path(const Config &c, const Tokens &t, const std::string &thread) {
+std::string scoped_path(const Config &c, const Tokens &t, const std::string &prefix,
+                        const std::string &key_suffix) {
     if (c.data_dir.empty() || t.user_id.empty() || t.org_id.empty())
         throw std::runtime_error(
             "Private data directory and scoped identity required for reliable send");
-    std::string scope = c.api_origin + "\n" + t.user_id + "\n" + t.org_id + "\n" + thread;
+    std::string scope = c.api_origin + "\n" + t.user_id + "\n" + t.org_id + "\n" + key_suffix;
     unsigned char digest[SHA256_DIGEST_LENGTH];
     SHA256(reinterpret_cast<const unsigned char *>(scope.data()), scope.size(), digest);
     static const char *hex = "0123456789abcdef";
@@ -359,7 +365,10 @@ std::string pending_path(const Config &c, const Tokens &t, const std::string &th
         key += hex[b >> 4];
         key += hex[b & 15];
     }
-    return c.data_dir + "/pending-" + key + ".json";
+    return c.data_dir + "/" + prefix + key + ".json";
+}
+std::string pending_path(const Config &c, const Tokens &t, const std::string &thread) {
+    return scoped_path(c, t, "pending-", thread);
 }
 void save_pending(const std::string &path, const Json &j) {
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
@@ -793,6 +802,51 @@ ListState Client::list(bool include_indicators, const std::string &project_filte
         out.projects.push_back({str(p, "id"), clipped(str(p, "name"), 512)});
     }
     return out;
+}
+Thread Client::fixed_thread() {
+    const auto path = scoped_path(config_, tokens_, "fixed-chat-", "cardputer");
+    // One reservation across concurrent launches for the same private data directory.
+    struct DirectoryLock {
+        int fd;
+        ~DirectoryLock() {
+            if (fd >= 0)
+                ::close(fd);
+        }
+    } lock{::open(config_.data_dir.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)};
+    if (lock.fd < 0 || ::flock(lock.fd, LOCK_EX) != 0)
+        throw std::runtime_error("Cannot lock fixed chat storage");
+
+    const auto record = detail::read_private(path);
+    auto id = str(record, "threadId");
+    const bool ready = flag(record, "ready");
+    const auto get_thread = [&](const Json &body) {
+        if (str(body, "id") != id)
+            invalid();
+        Thread result;
+        result.id = id;
+        result.title = str(body, "title");
+        return result;
+    };
+    if (is_uuid(id) && ready) {
+        try {
+            return get_thread(api("GET", tid(id) + "/metadata"));
+        } catch (const HttpError &error) {
+            // Only an authoritative miss permits replacing the selected chat.
+            if (error.status != 404 && error.status != 410)
+                throw;
+        }
+        id.clear();
+    }
+    if (!is_uuid(id)) {
+        id = uuid();
+        // The server treats clientThreadId as idempotent. Persist it before a
+        // request whose response may be lost, including across restarts.
+        detail::write_private(path, {{"threadId", id}, {"ready", false}});
+    }
+    auto thread = get_thread(
+        api("POST", "/api/chat-threads", {{"clientThreadId", id}, {"title", "Cardputer Zero"}}));
+    detail::write_private(path, {{"threadId", id}, {"ready", true}});
+    return thread;
 }
 std::vector<Message> Client::history(const std::string &thread) {
     auto path = pending_path(config_, tokens_, thread);

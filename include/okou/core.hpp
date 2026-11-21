@@ -129,6 +129,7 @@ class Client {
     }
     ListState list(bool include_indicators = true, const std::string &project_filter = {});
     Json indicators();
+    Thread fixed_thread();
     std::vector<Message> history(const std::string &thread_id);
     void mark_read(const std::string &thread_id);
     bool has_pending_send(const std::string &thread_id) const;

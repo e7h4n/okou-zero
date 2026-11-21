@@ -8,7 +8,6 @@ namespace okou {
 namespace {
 constexpr std::uint32_t paper = 0xf8f5f3, ink = 0x292724, muted = 0x74706b;
 constexpr std::uint32_t accent = 0xe4c6b8, green = 0x246948, border = 0xe4dfdb;
-constexpr std::uint32_t state_blue = 0x0284c7;
 
 lv_obj_t *shape(lv_obj_t *parent, int x, int y, int width, int height, int radius,
                 std::uint32_t color) {
@@ -21,26 +20,6 @@ lv_obj_t *shape(lv_obj_t *parent, int x, int y, int width, int height, int radiu
     lv_obj_set_style_bg_color(object, lv_color_hex(color), 0);
     lv_obj_set_style_bg_opa(object, LV_OPA_COVER, 0);
     return object;
-}
-void running_indicator(lv_obj_t *parent, int offset) {
-    auto *ring = shape(parent, 291, 8, 13, 13, LV_RADIUS_CIRCLE, state_blue);
-    lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(ring, 1, 0);
-    lv_obj_set_style_border_color(ring, lv_color_hex(state_blue), 0);
-    shape(parent, 295, 12, 5, 5, LV_RADIUS_CIRCLE, state_blue);
-    lv_anim_t animation;
-    lv_anim_init(&animation);
-    lv_anim_set_var(&animation, ring);
-    lv_anim_set_exec_cb(&animation, [](void *object, int32_t opacity) {
-        lv_obj_set_style_border_opa(static_cast<lv_obj_t *>(object), static_cast<lv_opa_t>(opacity),
-                                    0);
-    });
-    lv_anim_set_values(&animation, 72, 235);
-    lv_anim_set_duration(&animation, 1200);
-    lv_anim_set_reverse_duration(&animation, 1200);
-    lv_anim_set_delay(&animation, offset * 200);
-    lv_anim_set_repeat_count(&animation, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_start(&animation);
 }
 } // namespace
 UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
@@ -137,25 +116,13 @@ lv_obj_t *UI::row(const std::string &title, const std::string &detail, int y, bo
     }
     return box;
 }
-std::vector<std::size_t> UI::visible_threads() const {
-    std::vector<std::size_t> result;
-    for (std::size_t i = 0; i < list.threads.size(); ++i) {
-        if (project_filter.empty() ||
-            (project_filter == "~" && list.threads[i].project_id.empty()) ||
-            list.threads[i].project_id == project_filter)
-            result.push_back(i);
-    }
-    return result;
-}
 void UI::reset_account() {
     retained_voice_text.clear();
-    list = {};
     messages.clear();
     current = {};
     draft.clear();
     user_id.clear();
     org_id.clear();
-    project_filter.clear();
     user_code.clear();
     verification_uri.clear();
     selected = 0;
@@ -233,7 +200,7 @@ Action UI::handle(const Input &input) {
     }
     if (page == Page::chat) {
         if (input.key == Key::escape && !busy && !recording && !voice_pending && !submitting) {
-            page = Page::threads;
+            page = Page::settings;
             selected = 0;
         } else if (input.key == Key::record && voice_pending && !busy && !submitting &&
                    !voice_working && !uncertain) {
@@ -246,49 +213,23 @@ Action UI::handle(const Input &input) {
         return Action::none;
     }
     if (input.key == Key::escape) {
-        page = page == Page::settings ? Page::threads : Page::settings;
-        selected = 0;
+        page = Page::chat;
         return Action::none;
     }
-    if (input.key == Key::tab && page != Page::settings) {
-        page = page == Page::projects ? Page::threads : Page::projects;
-        selected = 0;
-        return Action::none;
-    }
-    int count = page == Page::settings   ? 4
-                : page == Page::projects ? static_cast<int>(list.projects.size()) + 2
-                                         : static_cast<int>(visible_threads().size());
     if (input.key == Key::up)
         selected = std::max(selected - 1, 0);
     if (input.key == Key::down)
-        selected = std::min(selected + 1, std::max(count - 1, 0));
-    if (input.key == Key::enter && !busy && count) {
-        if (page == Page::settings) {
-            if (selected == 0)
-                return Action::switch_workspace;
-            if (selected == 1)
-                return Action::logout;
-            if (selected == 2)
-                return Action::refresh;
-            return Action::quit;
+        selected = std::min(selected + 1, 3);
+    if (input.key == Key::enter && !busy) {
+        if (selected == 0)
+            return Action::switch_workspace;
+        if (selected == 1)
+            return Action::logout;
+        if (selected == 2) {
+            page = Page::chat;
+            return Action::refresh;
         }
-        if (page == Page::projects) {
-            auto previous = project_filter;
-            project_filter = selected == 0 ? ""
-                             : selected == 1
-                                 ? "~"
-                                 : list.projects.at(static_cast<std::size_t>(selected - 2)).id;
-            page = Page::threads;
-            selected = 0;
-            if (project_filter != previous)
-                return Action::filter_project;
-        } else {
-            auto visible = visible_threads();
-            if (selected < static_cast<int>(visible.size())) {
-                select_thread(list.threads[visible[static_cast<std::size_t>(selected)]]);
-                return Action::open;
-            }
-        }
+        return Action::quit;
     }
     return Action::none;
 }
@@ -377,21 +318,8 @@ void UI::render() {
     lv_obj_clean(body_);
     lv_obj_clean(footer_);
     std::string title = "Okou";
-    auto project_title = [&](const std::string &id) {
-        const auto found = std::find_if(list.projects.begin(), list.projects.end(),
-                                        [&](const auto &project) { return project.id == id; });
-        return found != list.projects.end() ? found->title : std::string{};
-    };
-    if (page == Page::threads) {
-        auto name = project_title(project_filter);
-        title = project_filter.empty()  ? "Okou / chats"
-                : project_filter == "~" ? "Without a project"
-                : name.empty()          ? "Project chats"
-                                        : name;
-    } else if (page == Page::projects)
-        title = "Okou / projects";
-    else if (page == Page::chat)
-        title = current.title.empty() ? "Chat" : current.title;
+    if (page == Page::chat)
+        title = current.title.empty() ? "Cardputer Zero" : current.title;
     else if (page == Page::settings)
         title = "Okou / workspace";
     auto heading = split_emoji_title(title);
@@ -430,7 +358,7 @@ void UI::render() {
         help = "Enter save   Esc exit";
     } else if (page == Page::login) {
         label(body_,
-              user_code.empty() ? "Your chats, on your Cardputer"
+              user_code.empty() ? "Your chat, on your Cardputer"
                                 : "Approve sign-in in your browser",
               8, 5, 304, ink);
         if (!user_code.empty()) {
@@ -443,68 +371,12 @@ void UI::render() {
         label(body_, status, 8, 101, 304, muted, 22);
         help = "Enter sign in   Esc exit";
     } else if (page == Page::settings) {
-        const std::vector<std::string> menu{"Switch workspace", "Sign out", "Refresh chats",
+        const std::vector<std::string> menu{"Switch workspace", "Sign out", "Refresh chat",
                                             "Return to launcher"};
         for (int i = 0; i < 4; ++i)
             row(menu[static_cast<std::size_t>(i)], i == 0 ? org_id : "", i * 29, selected == i,
                 ink);
         help = "Up/down select   Enter   Esc back";
-    } else if (page == Page::threads || page == Page::projects) {
-        if (page == Page::threads) {
-            auto visible = visible_threads();
-            selected = std::clamp(selected, 0, std::max(0, static_cast<int>(visible.size()) - 1));
-            int first = (selected / 4) * 4;
-            for (int row_index = 0;
-                 row_index < 4 && first + row_index < static_cast<int>(visible.size());
-                 ++row_index) {
-                const auto &thread =
-                    list.threads[visible[static_cast<std::size_t>(first + row_index)]];
-                const auto detail = project_filter.empty()
-                                        ? split_emoji_title(project_title(thread.project_id)).second
-                                        : std::string{};
-                auto *box = row(thread.title.empty() ? "Untitled chat" : thread.title, detail,
-                                row_index * 29, first + row_index == selected, ink);
-                if (thread.active) {
-                    running_indicator(box, row_index);
-                } else if (thread.muted) {
-                    auto *icon = label(box, LV_SYMBOL_BELL, 290, 6, 16, muted, 17);
-                    lv_obj_set_style_text_font(icon, &lv_font_montserrat_12, 0);
-                    static const lv_point_precise_t slash[] = {{0, 0}, {11, 11}};
-                    auto *line = lv_line_create(box);
-                    lv_line_set_points(line, slash, 2);
-                    lv_obj_set_pos(line, 291, 8);
-                    lv_obj_set_style_line_width(line, 2, 0);
-                    lv_obj_set_style_line_color(line, lv_color_hex(muted), 0);
-                } else if (thread.unread) {
-                    shape(box, 294, 11, 7, 7, LV_RADIUS_CIRCLE, state_blue);
-                } else if (thread.pinned) {
-                    shape(box, 294, 7, 7, 7, 2, muted);
-                    shape(box, 297, 12, 1, 7, 0, muted);
-                }
-            }
-            if (visible.empty())
-                label(body_,
-                      busy ? "Loading your chats..."
-                           : "No chats here yet\nCreate a chat at app.okou.ai",
-                      8, 16, 304, muted);
-        } else {
-            int count = static_cast<int>(list.projects.size()) + 2;
-            selected = std::clamp(selected, 0, count - 1);
-            int first = (selected / 4) * 4;
-            for (int i = first; i < std::min(first + 4, count); ++i) {
-                std::string name = i == 0   ? "All chats"
-                                   : i == 1 ? "Without a project"
-                                            : list.projects[static_cast<std::size_t>(i - 2)].title;
-                auto *box = row(name, "", (i - first) * 29, i == selected, ink,
-                                i == 0 ? LV_SYMBOL_LIST : LV_SYMBOL_DIRECTORY, i >= 2);
-                auto *arrow = label(box, LV_SYMBOL_RIGHT, 291, 6, 14, muted, 17);
-                lv_obj_set_style_text_font(arrow, &lv_font_montserrat_12, 0);
-            }
-        }
-        const bool request_failed = status.rfind("Could not", 0) == 0 ||
-                                    status.rfind("Sign-in expired", 0) == 0 ||
-                                    status.rfind("Access not granted", 0) == 0;
-        help = request_failed ? status : "Up/down   Enter open   Tab switch   Esc menu";
     } else {
         auto *history = lv_obj_create(body_);
         lv_obj_remove_style_all(history);
@@ -522,16 +394,20 @@ void UI::render() {
             lv_obj_update_layout(text);
             y += lv_obj_get_height(text) + 8;
         }
-        if (messages.empty())
-            label(history, busy ? "Loading conversation..." : "Hold Enter to start a voice message",
-                  3, 8, 299, muted);
+        if (messages.empty()) {
+            const auto empty_chat = current.id.empty() ? status
+                                    : busy             ? "Loading conversation..."
+                                                       : "Hold Enter to start a voice message";
+            label(history, empty_chat, 3, 8, 299, muted);
+        }
         lv_obj_update_layout(history);
         lv_obj_scroll_to_y(history, std::max(y - 122 - history_scroll_, 0), LV_ANIM_OFF);
         const bool voice_feedback = status == "No speech recognized" ||
                                     status == "Voice send failed" || status == "Message accepted" ||
                                     status == "Recording stopped" ||
                                     status == "Recording discarded";
-        help = uncertain                ? "Send uncertain: refresh history; do not resend"
+        help = current.id.empty()       ? "Ctrl+L retry   Ctrl+W settings"
+               : uncertain              ? "Send uncertain: refresh history; do not resend"
                : voice_pending && !busy ? "Voice retained: Ctrl+R retry   Esc discard"
                : submitting             ? "Sending... please wait"
                : recording || busy || voice_feedback ? status
@@ -543,37 +419,32 @@ void UI::render() {
     lv_obj_set_style_text_font(footer_text, &lv_font_montserrat_12, 0);
 }
 void UI::demo(const std::string &screen) {
-    list.projects = {{"project_demo", "💡 Product ideas"}, {"project_work", "🚀 工作台"}};
-    list.threads = {{"thread_1", "👩🏽‍💻 Plan a quieter morning", "project_demo",
-                     "agent_demo", true, false},
-                    {"thread_2", "🚀 研究下这个小机器", "project_demo", "agent_demo", false, true},
-                    {"thread_3", "A note for tomorrow", "", "agent_demo", false, false, true},
-                    {"thread_4", "Review the weekly update", "project_work", "agent_demo", false,
-                     false, false, true}};
     org_id = "Demo workspace";
-    battery = {72, screen != "projects"};
+    battery = {72, true};
     busy = false;
     submitting = recording = voice_pending = uncertain = voice_working = false;
     status = "Demo - no account or network";
-    if (screen == "projects")
-        page = Page::projects;
-    else if (screen == "login") {
+    if (screen == "login") {
         page = Page::login;
         user_code = "DEMO-CODE";
         verification_uri = "https://example.invalid/activate";
         status = "Demo only - this is not a real sign-in code";
-    } else if (screen == "chat" || screen == "recording") {
-        select_thread(list.threads[1]);
+    } else {
+        Thread demo_thread;
+        demo_thread.id = "demo-thread";
+        demo_thread.title = "Cardputer Zero";
+        select_thread(demo_thread);
         messages = {{"event_1", "user", "帮我整理今天要做的事", false},
                     {"event_2", "assistant", "当然。我们先从最重要的一件事开始。", true}};
         if (screen == "recording") {
             recording = true;
             recording_started = std::chrono::steady_clock::now();
         }
-    } else
-        page = Page::threads;
-    if (screen == "update")
+    }
+    if (screen == "update") {
+        page = Page::settings;
         update_message = "v0.2.3 Ctrl+Alt+U update";
+    }
     selected = 0;
 }
 } // namespace okou
