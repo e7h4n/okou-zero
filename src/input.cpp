@@ -145,6 +145,11 @@ std::vector<Input> Keyboard::poll() {
                 result.push_back({Key::text, event.text.text, false, false});
                 continue;
             }
+            if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+                result.push_back({Key::enter_cancel, {}});
+            if (event.type == SDL_KEYUP &&
+                (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
+                result.push_back({Key::enter_up, {}});
             if (event.type != SDL_KEYDOWN)
                 continue;
             auto mod = event.key.keysym.mod;
@@ -159,7 +164,8 @@ std::vector<Input> Keyboard::poll() {
             switch (event.key.keysym.sym) {
             case SDLK_RETURN:
             case SDLK_KP_ENTER:
-                out.key = Key::enter;
+                if (!event.key.repeat)
+                    out.key = Key::enter_down;
                 break;
             case SDLK_ESCAPE:
                 out.key = Key::escape;
@@ -226,7 +232,14 @@ std::vector<Input> Keyboard::poll() {
             throw std::runtime_error("Keyboard disconnected");
         if (event.type == EV_SYN && event.code == SYN_DROPPED) {
             shift_ = ctrl_ = false;
+            input_dropped_ = true;
             *update_shortcut_ = UpdateShortcut{};
+            result.push_back({Key::enter_cancel, {}});
+            continue;
+        }
+        if (input_dropped_) {
+            if (event.type == EV_SYN && event.code == SYN_REPORT)
+                input_dropped_ = false;
             continue;
         }
         if (event.type != EV_KEY)
@@ -245,6 +258,12 @@ std::vector<Input> Keyboard::poll() {
         }
         if (event.code == KEY_CAPSLOCK && event.value == 1) {
             caps_ = !caps_;
+            continue;
+        }
+        if (event.code == KEY_ENTER || event.code == KEY_KPENTER) {
+            if (event.value != 2)
+                result.push_back(
+                    {event.value ? Key::enter_down : Key::enter_up, {}, shift_, ctrl_});
             continue;
         }
         if (!event.value)

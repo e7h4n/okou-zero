@@ -2,6 +2,7 @@
 #include <iostream>
 #include <linux/input.h>
 #include <stdexcept>
+#include <unistd.h>
 
 int main() {
     using namespace okou;
@@ -23,6 +24,33 @@ int main() {
         check(map_key(KEY_ENTER, false, false, true).key == Key::enter);
         check(map_key(KEY_UP, false, false, false).key == Key::up);
         check(map_key(KEY_F12, false, false, false).key == Key::none);
+        int ports[2];
+        check(pipe(ports) == 0);
+        Keyboard keyboard(false, "/proc/self/fd/" + std::to_string(ports[0]));
+        const auto emit = [&](unsigned short type, unsigned short code, int value) {
+            input_event event{};
+            event.type = type;
+            event.code = code;
+            event.value = value;
+            check(write(ports[1], &event, sizeof(event)) == sizeof(event));
+        };
+        emit(EV_KEY, KEY_ENTER, 1);
+        emit(EV_KEY, KEY_ENTER, 2);
+        auto events = keyboard.poll();
+        check(events.size() == 1 && events[0].key == Key::enter_down);
+        emit(EV_KEY, KEY_ENTER, 0);
+        events = keyboard.poll();
+        check(events.size() == 1 && events[0].key == Key::enter_up);
+        emit(EV_SYN, SYN_DROPPED, 0);
+        emit(EV_KEY, KEY_ENTER, 0); // Discard the out-of-sync release.
+        emit(EV_SYN, SYN_REPORT, 0);
+        emit(EV_KEY, KEY_RIGHTSHIFT, 1);
+        emit(EV_KEY, KEY_KPENTER, 1);
+        events = keyboard.poll();
+        check(events.size() == 2 && events[0].key == Key::enter_cancel &&
+              events[1].key == Key::enter_down && events[1].shift);
+        close(ports[0]);
+        close(ports[1]);
         std::string text = "a中🙂";
         erase_utf8(text);
         check(text == "a中");

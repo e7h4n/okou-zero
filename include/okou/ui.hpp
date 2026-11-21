@@ -31,6 +31,7 @@ class UI {
     BatteryStatus battery;
     bool busy = false, recording = false, uncertain = false;
     bool submitting = false, voice_pending = false, voice_working = false;
+    bool push_to_talk = false;
     int selected = 0;
     explicit UI(lv_display_t *display);
     ~UI();
@@ -40,7 +41,8 @@ class UI {
     void demo(const std::string &screen);
     void select_thread(const Thread &thread);
     void reset_account();
-    void complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain);
+    void complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
+                       bool preserve_draft = false);
     void append_dictation(const std::string &thread_id, const std::string &text);
     void reconcile_send(const std::string &thread_id, bool pending);
     std::vector<std::size_t> visible_threads() const;

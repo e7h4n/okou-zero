@@ -36,6 +36,7 @@ class Engine {
     std::unique_ptr<AudioCapture> audio_;
     std::unique_ptr<Dictation> dictation_;
     std::string voice_thread_;
+    bool voice_send_direct_ = false;
     std::atomic_bool sending_{false}, voice_cancelled_{false};
     std::mutex mutex_;
     std::condition_variable cv_;
@@ -385,8 +386,10 @@ class Engine {
                 ui.reconcile_send(id, pending);
                 if (ui.current.id == id) {
                     ui.messages = std::move(messages);
-                    ui.busy = false;
-                    ui.status = pending ? "Send uncertain; do not resend" : "Up to date";
+                    if (!ui.recording && !ui.voice_pending && !ui.submitting) {
+                        ui.busy = false;
+                        ui.status = pending ? "Send uncertain; do not resend" : "Up to date";
+                    }
                 }
             });
         });
@@ -404,10 +407,10 @@ class Engine {
             refresh_indicators();
         });
     }
-    void send(const Thread &thread, const std::string &text) {
+    void send(const Thread &thread, const std::string &text, bool preserve_draft = false) {
         if (sending_.exchange(true))
             return;
-        enqueue([this, thread, text] {
+        enqueue([this, thread, text, preserve_draft] {
             try {
                 auto s = std::atomic_load(&session_);
                 SendResult result;
@@ -416,37 +419,49 @@ class Engine {
                     ensure(*s);
                     result = s->client->send(thread, text);
                 }
-                emit([id = thread.id, text, uncertain = result.uncertain](UI &ui) {
-                    ui.complete_send(id, text, uncertain);
+                emit([id = thread.id, text, uncertain = result.uncertain, preserve_draft](UI &ui) {
+                    ui.complete_send(id, text, uncertain, preserve_draft);
                     ui.busy = false;
                     ui.status = uncertain ? "Send uncertain; do not resend" : "Message accepted";
                 });
                 sending_ = false;
                 refresh_history();
                 refresh_indicators();
-            } catch (...) {
+            } catch (const std::exception &ex) {
                 sending_ = false;
-                emit([](UI &ui) { ui.submitting = false; });
-                throw;
+                error(ex);
+                emit([id = thread.id, text, preserve_draft](UI &ui) {
+                    ui.submitting = false;
+                    if (preserve_draft) {
+                        ui.append_dictation(id, text);
+                        ui.status = "Voice send failed; transcript added to draft";
+                    }
+                });
             }
         });
     }
-    void voice(bool finish, const std::string &thread_id) {
-        voice_cancelled_ = false;
-        enqueue([this, finish, thread_id] {
+    void voice(bool finish, const Thread &thread, bool send_direct = false) {
+        if (!finish)
+            voice_cancelled_ = false;
+        enqueue([this, finish, thread, send_direct] {
+            const auto &thread_id = thread.id;
             auto s = std::atomic_load(&session_);
             try {
                 if (!finish) {
                     voice_thread_ = thread_id;
+                    voice_send_direct_ = send_direct;
                     audio_ = std::make_unique<AudioCapture>(s->config.capture_device);
                     if (voice_cancelled_)
                         return;
                     audio_->start();
-                    emit([](UI &ui) {
+                    emit([send_direct](UI &ui) {
+                        if (send_direct && (!ui.push_to_talk || ui.voice_pending))
+                            return;
                         ui.recording = true;
                         ui.voice_working = false;
                         ui.busy = false;
-                        ui.status = "Recording; Ctrl+R finish, Esc cancel";
+                        ui.status = send_direct ? "Release Enter to send; Esc cancels"
+                                                : "Recording; Ctrl+R finish, Esc cancel";
                     });
                     return;
                 }
@@ -459,6 +474,7 @@ class Engine {
                 }
                 if (!dictation_) {
                     emit([](UI &ui) {
+                        ui.push_to_talk = false;
                         ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
                     });
                     return;
@@ -477,6 +493,8 @@ class Engine {
                         return s->client->transcribe(pcm, previous, overlap);
                     },
                     [this, s](const std::vector<std::string> &segments) {
+                        if (voice_send_direct_ && segments.size() == 1)
+                            return segments.front();
                         std::lock_guard<std::mutex> guard(s->io);
                         ensure(*s);
                         return s->client->polish(segments);
@@ -485,10 +503,20 @@ class Engine {
                 if (voice_cancelled_ || stopping_)
                     return;
                 dictation_.reset();
-                emit([thread_id, text](UI &ui) {
-                    ui.append_dictation(thread_id, text);
+                emit([this, thread, text = std::move(text), direct = voice_send_direct_](UI &ui) {
+                    if (voice_cancelled_)
+                        return;
+                    ui.push_to_talk = false;
                     ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
-                    ui.status = "Dictation added to draft; review before sending";
+                    if (text.find_first_not_of(" \t\r\n") == std::string::npos) {
+                        ui.status = "No speech recognized";
+                    } else if (direct) {
+                        ui.submitting = ui.busy = true;
+                        send(thread, text, true);
+                    } else {
+                        ui.append_dictation(thread.id, text);
+                        ui.status = "Dictation added to draft; review before sending";
+                    }
                 });
             } catch (const std::exception &ex) {
                 if (audio_) {
@@ -500,7 +528,7 @@ class Engine {
                     dictation_.reset();
                 error(ex);
                 emit([retained](UI &ui) {
-                    ui.recording = ui.voice_working = ui.busy = false;
+                    ui.push_to_talk = ui.recording = ui.voice_working = ui.busy = false;
                     ui.voice_pending = retained;
                     ui.status = retained ? "Voice retained: Ctrl+R retry; Esc discard"
                                          : "Recording stopped; draft unchanged";
@@ -518,6 +546,7 @@ class Engine {
             dictation_.reset();
             voice_thread_.clear();
             emit([](UI &ui) {
+                ui.push_to_talk = false;
                 ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
                 ui.status = "Recording discarded";
             });
@@ -636,6 +665,12 @@ int main(int argc, char **argv) {
             check(ui.handle({Key::enter, {}, false, false}) == Action::none);
             ui.reconcile_send(ui.current.id, false);
             check(ui.draft.empty() && !ui.uncertain);
+            ui.draft = sent_text;
+            ui.complete_send(ui.current.id, sent_text, false, true);
+            check(ui.draft == sent_text);
+            ui.complete_send(ui.current.id, sent_text, true, true);
+            ui.reconcile_send(ui.current.id, false);
+            check(ui.draft == sent_text && !ui.uncertain);
             ui.handle({Key::escape, {}, false, false});
             ui.handle({Key::tab, {}, false, false});
             check(ui.page == Page::projects);
@@ -689,6 +724,10 @@ int main(int argc, char **argv) {
         auto next_battery_read = last;
         bool dirty = true, running = true, restart = false;
         UpdateProcess updater;
+        constexpr auto enter_hold_delay = std::chrono::milliseconds(350);
+        std::chrono::steady_clock::time_point enter_pressed{};
+        std::string enter_thread;
+        bool enter_recording = false;
         if (!demo)
             updater.start(false, OKOU_ZERO_VERSION);
         while ((running && !interrupted) || updater.installing()) {
@@ -724,8 +763,50 @@ int main(int argc, char **argv) {
                     throw;
                 running = false; // Finish the confirmed install before leaving.
             }
-            for (const auto &input : inputs) {
+            for (auto input : inputs) {
                 if (updater.installing())
+                    continue;
+                if (input.key == Key::enter_cancel || input.key == Key::escape) {
+                    enter_thread.clear();
+                    enter_recording = false;
+                    if (input.key == Key::enter_cancel) {
+                        if (engine && ui.push_to_talk && ui.recording) {
+                            ui.push_to_talk = false;
+                            engine->cancel_voice();
+                        }
+                        continue;
+                    }
+                }
+                if (input.key == Key::enter_down) {
+                    if (ui.page == Page::chat && !input.shift && !input.ctrl) {
+                        if (engine && !ui.busy && !ui.recording && !ui.voice_pending &&
+                            !ui.submitting && !ui.uncertain && enter_thread.empty()) {
+                            enter_thread = ui.current.id;
+                            enter_pressed = std::chrono::steady_clock::now();
+                        }
+                        continue;
+                    }
+                    input.key = Key::enter;
+                } else if (input.key == Key::enter_up) {
+                    const bool same_chat = ui.page == Page::chat && !enter_thread.empty() &&
+                                           enter_thread == ui.current.id;
+                    enter_thread.clear();
+                    if (enter_recording) {
+                        enter_recording = false;
+                        if (same_chat && ui.push_to_talk && ui.recording) {
+                            ui.recording = false;
+                            ui.voice_pending = ui.voice_working = ui.busy = true;
+                            ui.status = "Transcribing...";
+                            engine->voice(true, ui.current);
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    if (!same_chat)
+                        continue;
+                    input = {Key::enter, {}};
+                }
+                if (input.key == Key::record && ui.push_to_talk)
                     continue;
                 if (input.key == Key::update) {
                     if (updater.view().status == UpdateStatus::ready) {
@@ -781,7 +862,7 @@ int main(int argc, char **argv) {
                     engine->send(ui.current, ui.draft);
                     break;
                 case Action::voice:
-                    engine->voice(finishing_voice, ui.current.id);
+                    engine->voice(finishing_voice, ui.current);
                     break;
                 case Action::logout:
                     engine->logout(false);
@@ -792,6 +873,17 @@ int main(int argc, char **argv) {
                 default:
                     break;
                 }
+            }
+            if (!enter_thread.empty() && (ui.page != Page::chat || ui.current.id != enter_thread))
+                enter_thread.clear();
+            if (running && !updater.installing() && !enter_thread.empty() && !enter_recording &&
+                !ui.busy && !ui.recording && !ui.voice_pending && !ui.submitting && !ui.uncertain &&
+                std::chrono::steady_clock::now() - enter_pressed >= enter_hold_delay) {
+                enter_recording = true;
+                ui.push_to_talk = ui.recording = ui.voice_working = ui.busy = true;
+                ui.status = "Starting microphone...";
+                engine->voice(false, ui.current, true);
+                dirty = true;
             }
             if (dirty) {
                 ui.render();

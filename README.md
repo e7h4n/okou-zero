@@ -118,6 +118,7 @@ replaced. Public CI tests mock updater network calls and never install a real up
 | Enter in composer | Explicitly submit text |
 | Shift+Enter | Insert a newline |
 | Backspace | Delete one UTF-8 code point |
+| Hold Enter in chat | Record after a short hold, then release to transcribe and send directly |
 | Ctrl+R | Start/finish dictation, or explicitly retry retained voice work |
 | Esc while recording/recovering | Discard recording and retained voice work |
 | Esc | Back/menu |

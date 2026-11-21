@@ -160,18 +160,20 @@ void UI::reset_account() {
     verification_uri.clear();
     selected = 0;
     history_scroll_ = 0;
-    busy = recording = uncertain = submitting = voice_pending = voice_working = false;
+    push_to_talk = busy = recording = uncertain = submitting = voice_pending = voice_working =
+        false;
 }
-void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain) {
+void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
+                       bool preserve_draft) {
     if (current.id == thread_id) {
-        if (!was_uncertain && draft == text)
+        if (!preserve_draft && !was_uncertain && draft == text)
             draft.clear();
         uncertain = was_uncertain;
     }
     auto cached = drafts_.find(thread_id);
-    if (!was_uncertain && cached != drafts_.end() && cached->second == text)
+    if (!preserve_draft && !was_uncertain && cached != drafts_.end() && cached->second == text)
         drafts_.erase(cached);
-    if (was_uncertain)
+    if (was_uncertain && !preserve_draft)
         pending_texts_[thread_id] = text;
     else
         pending_texts_.erase(thread_id);
@@ -250,6 +252,7 @@ Action UI::handle(const Input &input) {
         } else if (input.key == Key::text && !recording && !submitting && !uncertain &&
                    draft.size() + input.text.size() <= 16000) {
             draft += input.text;
+            status.clear();
         } else if (input.key == Key::backspace && !recording && !submitting && !uncertain)
             erase_utf8(draft);
         else if (input.key == Key::enter && input.shift && !recording && !submitting &&
@@ -491,18 +494,24 @@ void UI::render() {
         lv_obj_set_style_bg_opa(composer, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(composer, 5, 0);
         lv_obj_remove_flag(composer, LV_OBJ_FLAG_SCROLLABLE);
-        std::string text = recording       ? "Recording... Ctrl+R to finish"
-                           : draft.empty() ? "Message Okou..."
-                                           : draft;
+        const char *recording_hint =
+            push_to_talk ? "Recording... release Enter" : "Recording... Ctrl+R to finish";
+        std::string text = recording && voice_working && push_to_talk ? "Starting microphone..."
+                           : recording                                ? recording_hint
+                           : draft.empty()                            ? "Message Okou..."
+                                                                      : draft;
         auto *compose_text = label(composer, text, 6, 3, 298, draft.empty() ? muted : ink);
         lv_obj_update_layout(compose_text);
         if (lv_obj_get_height(compose_text) > 33)
             lv_obj_set_y(compose_text, 33 - lv_obj_get_height(compose_text));
+        const bool voice_feedback = status == "No speech recognized" ||
+                                    status == "Voice send failed; transcript added to draft" ||
+                                    status == "Recording stopped; draft unchanged";
         help = uncertain                ? "Send uncertain: refresh history; do not resend"
                : voice_pending && !busy ? "Voice retained: Ctrl+R retry   Esc discard"
                : submitting             ? "Sending... please wait"
-               : busy                   ? status
-                                        : "Enter send   Ctrl+R voice   Esc back";
+               : busy || voice_feedback ? status
+                                        : "Enter send   Hold Enter voice   Esc back";
     }
     if (!update_message.empty())
         help = update_message;
@@ -520,7 +529,7 @@ void UI::demo(const std::string &screen) {
     org_id = "Demo workspace";
     battery = {72, screen != "projects"};
     busy = false;
-    submitting = recording = voice_pending = uncertain = voice_working = false;
+    push_to_talk = submitting = recording = voice_pending = uncertain = voice_working = false;
     status = "Demo - no account or network";
     if (screen == "projects")
         page = Page::projects;
