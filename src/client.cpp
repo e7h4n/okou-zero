@@ -562,11 +562,9 @@ std::vector<Message> present(const History &h) {
             if (!run.empty() && runs.count(run)) {
                 for (auto index : runs[run])
                     out[index].terminal = true;
-                out.push_back({id, "system",
-                               type == "run.completed"
-                                   ? "Run completed"
-                                   : (type == "run.failed" ? "Run failed" : "Run cancelled"),
-                               true});
+                if (type != "run.completed")
+                    out.push_back({id, "system",
+                                   type == "run.failed" ? "Run failed" : "Run cancelled", true});
             }
             continue;
         } else if (type.find("approval") != std::string::npos ||

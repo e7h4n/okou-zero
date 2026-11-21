@@ -363,11 +363,10 @@ void history_test() {
                     get(rows_path(3, id(3)), tail(Json::array({d, end}), 5, id(5))),
                     get(rows_path(5, id(5)), tail(Json::array(), 5, id(5)))});
     auto messages = f.client().history(thread_id);
-    check(messages.size() == 3, "revoked event removed");
+    check(messages.size() == 2, "Revoked and successful completion rows hidden");
     check(messages[0].role == "user" && messages[0].text == "Hello", "user presentation");
     check(messages[1].text == "Visible answer" && messages[1].terminal,
           "assistant terminal evidence");
-    check(messages[2].terminal, "terminal marker");
     f.server.finish();
 }
 template <class Fn> void throws(Fn fn, const std::string &what) {

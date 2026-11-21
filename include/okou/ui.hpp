@@ -1,6 +1,7 @@
 #pragma once
 #include "okou/core.hpp"
 #include "okou/platform.hpp"
+#include <chrono>
 
 namespace okou {
 class EmojiRenderer;
@@ -12,7 +13,6 @@ enum class Action {
     refresh,
     filter_project,
     open,
-    send,
     voice,
     switch_workspace,
     logout,
@@ -31,7 +31,8 @@ class UI {
     BatteryStatus battery;
     bool busy = false, recording = false, uncertain = false;
     bool submitting = false, voice_pending = false, voice_working = false;
-    bool push_to_talk = false;
+    std::chrono::steady_clock::time_point recording_started{};
+    std::string retained_voice_text;
     int selected = 0;
     explicit UI(lv_display_t *display);
     ~UI();
@@ -42,9 +43,9 @@ class UI {
     void select_thread(const Thread &thread);
     void reset_account();
     void complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
-                       bool preserve_draft = false, const std::string &event_id = {});
+                       const std::string &event_id = {});
     void update_history(std::vector<Message> history);
-    void append_dictation(const std::string &thread_id, const std::string &text);
+    void update_recording_clock();
     void reconcile_send(const std::string &thread_id, bool pending);
     std::vector<std::size_t> visible_threads() const;
 
@@ -58,8 +59,10 @@ class UI {
     std::unique_ptr<EmojiRenderer> emoji_;
     int history_scroll_ = 0;
     std::vector<Message> acknowledged_messages_;
-    std::map<std::string, std::string> drafts_;
-    std::map<std::string, std::string> pending_texts_;
+    lv_obj_t *recording_overlay_ = nullptr;
+    lv_obj_t *recording_clock_ = nullptr;
+    long recording_seconds_ = -1;
+    void render_recording();
     lv_obj_t *label(lv_obj_t *parent, const std::string &text, int x, int y, int width,
                     std::uint32_t color, int height = 0);
     lv_obj_t *row(const std::string &title, const std::string &detail, int y, bool selected,

@@ -19,9 +19,8 @@ Implemented surfaces:
   refresh-token rotation and local logout. No password or client secret on device.
 - Project and conversation lists, active/unread indicators and history.
 - Chat-only Ably subscription with reconnect, token renewal and gap reconciliation.
-- Explicit text submission with durable uncertain-send identity, never blind resend.
-- Deliberate microphone recording, transcription into an editable draft,
-  then **manual** submission. No hot microphone, automatic sending or spoken reply.
+- Voice-only chat with a full-screen recording indicator. Hold Enter to record,
+  then release to transcribe and send. Uncertain deliveries are never resent automatically.
 - SDL2 desktop simulator, Linux framebuffer/evdev device backend and CPack `.deb`.
 - GitHub Actions desktop tests/screenshots and native ARM64 package/install tests.
 
@@ -115,11 +114,8 @@ replaced. Public CI tests mock updater network calls and never install a real up
 | --- | --- |
 | Up / down, Enter | Select and open a row; scroll conversation history |
 | Tab | Switch between chats and projects |
-| Enter in composer | Explicitly submit text |
-| Shift+Enter | Insert a newline |
-| Backspace | Delete one UTF-8 code point |
-| Hold Enter in chat | Record after a short hold, then release to transcribe and send directly |
-| Ctrl+R | Start/finish dictation, or explicitly retry retained voice work |
+| Hold Enter in chat | Record while held, then release to transcribe and send directly |
+| Ctrl+R | Retry a retained recording or failed voice message |
 | Esc while recording/recovering | Discard recording and retained voice work |
 | Esc | Back/menu |
 | Ctrl+W | Workspace/sign-out menu |
