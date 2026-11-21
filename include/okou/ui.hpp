@@ -5,28 +5,15 @@
 
 namespace okou {
 class EmojiRenderer;
-enum class Page { login, setup, threads, projects, chat, settings };
-enum class Action {
-    none,
-    login,
-    configure,
-    refresh,
-    filter_project,
-    open,
-    voice,
-    switch_workspace,
-    logout,
-    quit
-};
+enum class Page { login, setup, chat, settings };
+enum class Action { none, login, configure, refresh, voice, switch_workspace, logout, quit };
 class UI {
   public:
     Page page = Page::login;
-    ListState list;
     std::vector<Message> messages;
     Thread current;
     std::string draft, status = "Sign in to continue", user_id, org_id;
     std::string user_code, verification_uri;
-    std::string project_filter;
     std::string update_message;
     BatteryStatus battery;
     bool busy = false, recording = false, uncertain = false;
@@ -47,7 +34,6 @@ class UI {
     void update_history(std::vector<Message> history);
     void update_recording_clock();
     void reconcile_send(const std::string &thread_id, bool pending);
-    std::vector<std::size_t> visible_threads() const;
 
   private:
     lv_obj_t *root_ = nullptr;

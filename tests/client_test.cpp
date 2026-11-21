@@ -469,6 +469,36 @@ okou::Thread thread() {
     t.agent_id = agent;
     return t;
 }
+void fixed_thread_test() {
+    Fixture f;
+    std::string original, replacement;
+    const auto create = [&](std::string &saved, int status) {
+        return [&, status](const Request &r) {
+            api_request(r, "POST", "/api/chat-threads");
+            auto request = Json::parse(r.body);
+            const auto candidate = request.at("clientThreadId").get<std::string>();
+            if (saved.empty())
+                saved = candidate;
+            check(candidate == saved, "Retries reuse the reserved chat ID");
+            return json({{"id", candidate}, {"title", "Cardputer Zero"}}, status);
+        };
+    };
+    const auto open = [&](int status) {
+        return [&, status](const Request &r) {
+            api_request(r, "GET", "/api/chat-threads/" + original + "/metadata");
+            return json({{"id", original}, {"title", "Renamed"}}, status);
+        };
+    };
+    f.server.start({create(original, 503), create(original, 201), open(200), open(503), open(404),
+                    create(replacement, 201)});
+    throws([&] { f.client().fixed_thread(); }, "Transient create failure surfaces");
+    check(f.client().fixed_thread().id == original, "Reserved ID persisted before create");
+    check(f.client().fixed_thread().title == "Renamed", "Launch opens the existing fixed chat");
+    throws([&] { f.client().fixed_thread(); }, "A service outage does not create another chat");
+    check(f.client().fixed_thread().id == replacement && replacement != original,
+          "An authoritative miss replaces the fixed chat");
+    f.server.finish();
+}
 void send_test() {
     Fixture f;
     std::string sent_id, sort;
@@ -753,6 +783,7 @@ int main() {
         large_list_test(true);
         history_test();
         bad_history_tests();
+        fixed_thread_test();
         send_test();
         send_identity_test();
         assistant_content_test();

@@ -42,11 +42,8 @@ class Engine {
     std::deque<std::function<void()>> tasks_;
     std::deque<Update> updates_;
     std::thread worker_;
-    std::atomic_bool stopping_{false}, metadata_pending_{false}, indicators_pending_{false},
-        history_pending_{false};
+    std::atomic_bool stopping_{false}, history_pending_{false};
     std::string selected_thread_;
-    std::string selected_project_;
-    Json indicators_ = Json::object();
     void emit(Update update) {
         std::lock_guard<std::mutex> guard(mutex_);
         updates_.push_back(std::move(update));
@@ -83,14 +80,6 @@ class Engine {
             ui.busy = false;
         });
     }
-    static void apply_indicators(UI &ui, const Json &indicators) {
-        auto threads = indicators.value("threads", Json::object());
-        for (auto &thread : ui.list.threads) {
-            auto value = threads.value(thread.id, std::string{});
-            thread.active = value == "active";
-            thread.unread = value == "unread" && !thread.muted;
-        }
-    }
     void stop_realtime() {
         if (realtime_) {
             realtime_->stop();
@@ -119,20 +108,8 @@ class Engine {
                 auto current = weak.lock();
                 if (!current || current != std::atomic_load(&session_) || stopping_)
                     return;
-                if (name == "connection:connected")
-                    emit([](UI &ui) { ui.status = "Connected"; });
-                else if (name == "connection:disconnected")
-                    emit([](UI &ui) { ui.status = "Reconnecting..."; });
-                if (name == "connection:gap") {
-                    refresh(false);
-                    refresh_indicators();
-                    refresh_history();
-                } else if (name == "threadListChanged")
-                    refresh(false);
-                else if (name == "chatIndicatorsChanged" || name == "chatThreadReadCursorUpdated")
-                    refresh_indicators();
-                else if (name.rfind("chatThreadMessageCreated:", 0) == 0 ||
-                         name.rfind("chatThreadDetailChanged:", 0) == 0)
+                if (name == "connection:gap" || name.rfind("chatThreadMessageCreated:", 0) == 0 ||
+                    name.rfind("chatThreadDetailChanged:", 0) == 0)
                     refresh_history();
             });
         realtime_->start();
@@ -207,14 +184,13 @@ class Engine {
             emit([tokens](UI &ui) {
                 ui.user_id = tokens.user_id;
                 ui.org_id = tokens.org_id;
-                ui.page = Page::threads;
+                ui.page = Page::chat;
                 ui.busy = true;
-                ui.status = "Loading chats...";
+                ui.status = "Opening your chat...";
             });
             enqueue([this, s] {
                 start_realtime(s);
-                refresh(false);
-                refresh_indicators();
+                open_fixed_chat();
             });
         });
     }
@@ -293,21 +269,18 @@ class Engine {
                     s->auth.save(s->tokens);
                     s->client = std::make_unique<Client>(s->config, s->http, s->tokens);
                 }
-                indicators_ = Json::object();
                 selected_thread_.clear();
-                selected_project_.clear();
                 auto tokens = s->tokens;
                 emit([tokens](UI &ui) {
                     ui.reset_account();
                     ui.user_id = tokens.user_id;
                     ui.org_id = tokens.org_id;
-                    ui.page = Page::threads;
+                    ui.page = Page::chat;
                     ui.busy = true;
-                    ui.status = "Loading chats...";
+                    ui.status = "Opening your chat...";
                 });
                 start_realtime(s);
-                refresh(false);
-                refresh_indicators();
+                open_fixed_chat();
                 return;
             }
             if (!stopping_)
@@ -318,51 +291,26 @@ class Engine {
                 });
         });
     }
-    void refresh(bool include_indicators = true) {
-        if (metadata_pending_.exchange(true))
-            return;
-        enqueue([this, include_indicators] {
-            metadata_pending_ = false;
-            auto s = std::atomic_load(&session_);
-            auto project = selected_project_;
-            ListState list;
-            {
-                std::lock_guard<std::mutex> guard(s->io);
-                ensure(*s);
-                list = s->client->list(false, project);
-            }
-            auto indicators = indicators_;
-            emit([list = std::move(list), indicators, project](UI &ui) mutable {
-                if (ui.project_filter != project)
-                    return;
-                ui.list = std::move(list);
-                apply_indicators(ui, indicators);
-                ui.busy = false;
-                ui.status = "Up to date";
-            });
-            if (include_indicators)
-                refresh_indicators();
-        });
-    }
-    void select_project(std::string project) {
-        enqueue([this, project = std::move(project)] {
-            selected_project_ = project;
-            refresh(false);
-        });
-    }
-    void refresh_indicators() {
-        if (indicators_pending_.exchange(true))
-            return;
+    void open_fixed_chat() {
         enqueue([this] {
-            indicators_pending_ = false;
             auto s = std::atomic_load(&session_);
+            Thread thread;
             {
                 std::lock_guard<std::mutex> guard(s->io);
                 ensure(*s);
-                indicators_ = s->client->indicators();
+                thread = s->client->fixed_thread();
             }
-            auto indicators = indicators_;
-            emit([indicators](UI &ui) { apply_indicators(ui, indicators); });
+            const bool changed = selected_thread_ != thread.id;
+            selected_thread_ = thread.id;
+            emit([thread, changed](UI &ui) {
+                if (changed || ui.current.id != thread.id)
+                    ui.select_thread(thread);
+                else
+                    ui.current.title = thread.title;
+                ui.busy = true;
+                ui.status = "Loading conversation...";
+            });
+            refresh_history();
         });
     }
     void refresh_history() {
@@ -390,22 +338,11 @@ class Engine {
                         ui.busy = false;
                         if (pending)
                             ui.status = "Send uncertain; do not resend";
+                        else if (ui.status == "Loading conversation...")
+                            ui.status.clear();
                     }
                 }
             });
-        });
-    }
-    void open(const Thread &thread) {
-        enqueue([this, thread] {
-            selected_thread_ = thread.id;
-            refresh_history();
-            auto s = std::atomic_load(&session_);
-            {
-                std::lock_guard<std::mutex> guard(s->io);
-                ensure(*s);
-                s->client->mark_read(thread.id);
-            }
-            refresh_indicators();
         });
     }
     void send(const Thread &thread, const std::string &text) {
@@ -428,7 +365,6 @@ class Engine {
                 });
                 sending_ = false;
                 refresh_history();
-                refresh_indicators();
             } catch (const std::exception &ex) {
                 sending_ = false;
                 error(ex, diagnostics::Stage::chat_send);
@@ -564,8 +500,6 @@ class Engine {
                 s->client.reset();
             }
             selected_thread_.clear();
-            selected_project_.clear();
-            indicators_ = Json::object();
             emit([switch_workspace](UI &ui) {
                 ui.reset_account();
                 ui.page = Page::login;
@@ -582,7 +516,7 @@ int main(int argc, char **argv) {
     using namespace okou;
     try {
         bool demo = false, self_test = false, headless = false;
-        std::string screen = "threads", screenshot, config_path;
+        std::string screen = "chat", screenshot, config_path;
         for (int i = 1; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--version") {
@@ -604,7 +538,7 @@ int main(int argc, char **argv) {
                 config_path = argv[++i];
             else if (arg == "--help") {
                 std::cout << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen "
-                             "login|threads|projects|chat|recording]\n  --screenshot PATH "
+                             "login|chat|recording|update]\n  --screenshot PATH "
                              "(simulator only)\n "
                              " --self-test-ui\n";
                 return 0;
@@ -642,9 +576,9 @@ int main(int argc, char **argv) {
             check(split_emoji_title("🇨🇳 项目").first == "🇨🇳");
             check(split_emoji_title("1️⃣ Project").second == "Project");
             check(split_emoji_title("Plan 2026").first.empty());
-            ui.handle({Key::down, {}, false, false});
-            check(ui.selected == 1);
-            check(ui.handle({Key::enter, {}, false, false}) == Action::open);
+            ui.demo("chat");
+            check(ui.page == Page::chat && !ui.current.id.empty());
+            check(ui.handle({Key::tab, {}, false, false}) == Action::none);
             check(ui.page == Page::chat);
             check(ui.handle({Key::text, "中文 input!", false, false}) == Action::none);
             check(ui.draft.empty());
@@ -662,14 +596,9 @@ int main(int argc, char **argv) {
             ui.reconcile_send(ui.current.id, false);
             check(!ui.uncertain);
             ui.handle({Key::escape, {}, false, false});
-            ui.handle({Key::tab, {}, false, false});
-            check(ui.page == Page::projects);
-            ui.handle({Key::down, {}, false, false});
-            ui.handle({Key::down, {}, false, false});
-            ui.handle({Key::enter, {}, false, false});
-            check(ui.project_filter == "project_demo");
-            check(ui.visible_threads().size() == 2);
-            ui.select_thread(ui.list.threads[0]);
+            check(ui.page == Page::settings);
+            ui.handle({Key::escape, {}, false, false});
+            check(ui.page == Page::chat);
             check(ui.handle({Key::record, {}, false, false}) == Action::none);
             ui.recording = true;
             ui.render();
@@ -810,16 +739,7 @@ int main(int argc, char **argv) {
                     engine->configure(ui.draft);
                     break;
                 case Action::refresh:
-                    engine->refresh();
-                    engine->refresh_history();
-                    break;
-                case Action::filter_project:
-                    ui.list.threads.clear();
-                    ui.status = "Loading chats...";
-                    engine->select_project(ui.project_filter);
-                    break;
-                case Action::open:
-                    engine->open(ui.current);
+                    engine->open_fixed_chat();
                     break;
                 case Action::voice:
                     if (ui.retained_voice_text.empty()) {
