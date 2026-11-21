@@ -562,11 +562,9 @@ std::vector<Message> present(const History &h) {
             if (!run.empty() && runs.count(run)) {
                 for (auto index : runs[run])
                     out[index].terminal = true;
-                out.push_back({id, "system",
-                               type == "run.completed"
-                                   ? "Run completed"
-                                   : (type == "run.failed" ? "Run failed" : "Run cancelled"),
-                               true});
+                if (type != "run.completed")
+                    out.push_back({id, "system",
+                                   type == "run.failed" ? "Run failed" : "Run cancelled", true});
             }
             continue;
         } else if (type.find("approval") != std::string::npos ||
@@ -838,13 +836,10 @@ SendResult Client::send(const Thread &thread, const std::string &text,
     if (!is_uuid(id))
         throw std::runtime_error("Invalid message identity");
     auto metadata = api("GET", base + "/metadata");
-    if (str(metadata, "id") != thread.id ||
-        (!thread.agent_id.empty() && str(metadata, "agentId") != thread.agent_id) ||
-        !is_uuid(str(metadata, "agentId")))
+    if (str(metadata, "id") != thread.id)
         invalid();
     auto sort = uuid();
-    Json body = {{"agentId", str(metadata, "agentId")},
-                 {"threadId", thread.id},
+    Json body = {{"threadId", thread.id},
                  {"prompt", text},
                  {"clientEventId", id},
                  {"chatThreadSortEventId", sort},

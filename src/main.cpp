@@ -70,8 +70,9 @@ class Engine {
             s.client->set_tokens(s.tokens);
         }
     }
-    void error(const std::exception &ex) {
-        diagnostics::log_error(diagnostics::Stage::application, ex);
+    void error(const std::exception &ex,
+               diagnostics::Stage stage = diagnostics::Stage::application) {
+        diagnostics::log_error(stage, ex);
         const auto *http = dynamic_cast<const HttpError *>(&ex);
         long status = http ? http->status : 0;
         std::string text = status == 401   ? "Sign-in expired; sign in again"
@@ -384,9 +385,12 @@ class Engine {
             emit([id, messages = std::move(messages), pending](UI &ui) mutable {
                 ui.reconcile_send(id, pending);
                 if (ui.current.id == id) {
-                    ui.messages = std::move(messages);
-                    ui.busy = false;
-                    ui.status = pending ? "Send uncertain; do not resend" : "Up to date";
+                    ui.update_history(std::move(messages));
+                    if (!ui.recording && !ui.voice_pending && !ui.submitting) {
+                        ui.busy = false;
+                        if (pending)
+                            ui.status = "Send uncertain; do not resend";
+                    }
                 }
             });
         });
@@ -416,24 +420,34 @@ class Engine {
                     ensure(*s);
                     result = s->client->send(thread, text);
                 }
-                emit([id = thread.id, text, uncertain = result.uncertain](UI &ui) {
-                    ui.complete_send(id, text, uncertain);
+                emit([id = thread.id, text, result = std::move(result)](UI &ui) {
+                    const bool uncertain = result.uncertain;
+                    ui.complete_send(id, text, uncertain, result.client_event_id);
                     ui.busy = false;
                     ui.status = uncertain ? "Send uncertain; do not resend" : "Message accepted";
                 });
                 sending_ = false;
                 refresh_history();
                 refresh_indicators();
-            } catch (...) {
+            } catch (const std::exception &ex) {
                 sending_ = false;
-                emit([](UI &ui) { ui.submitting = false; });
-                throw;
+                error(ex, diagnostics::Stage::chat_send);
+                emit([id = thread.id, text](UI &ui) {
+                    ui.submitting = false;
+                    if (ui.current.id == id) {
+                        ui.retained_voice_text = text;
+                        ui.voice_pending = true;
+                        ui.status = "Voice send failed";
+                    }
+                });
             }
         });
     }
-    void voice(bool finish, const std::string &thread_id) {
-        voice_cancelled_ = false;
-        enqueue([this, finish, thread_id] {
+    void voice(bool finish, const Thread &thread) {
+        if (!finish)
+            voice_cancelled_ = false;
+        enqueue([this, finish, thread] {
+            const auto &thread_id = thread.id;
             auto s = std::atomic_load(&session_);
             try {
                 if (!finish) {
@@ -442,16 +456,17 @@ class Engine {
                     if (voice_cancelled_)
                         return;
                     audio_->start();
-                    emit([](UI &ui) {
-                        ui.recording = true;
+                    emit([this, started = std::chrono::steady_clock::now()](UI &ui) {
+                        if (voice_cancelled_ || !ui.recording)
+                            return;
+                        ui.recording_started = started;
                         ui.voice_working = false;
                         ui.busy = false;
-                        ui.status = "Recording; Ctrl+R finish, Esc cancel";
                     });
                     return;
                 }
                 if (voice_thread_ != thread_id)
-                    throw std::runtime_error("Recording belongs to another draft");
+                    throw std::runtime_error("Recording belongs to another chat");
                 if (audio_) {
                     auto pcm = audio_->finish();
                     audio_.reset();
@@ -477,6 +492,8 @@ class Engine {
                         return s->client->transcribe(pcm, previous, overlap);
                     },
                     [this, s](const std::vector<std::string> &segments) {
+                        if (segments.size() == 1)
+                            return segments.front();
                         std::lock_guard<std::mutex> guard(s->io);
                         ensure(*s);
                         return s->client->polish(segments);
@@ -485,10 +502,16 @@ class Engine {
                 if (voice_cancelled_ || stopping_)
                     return;
                 dictation_.reset();
-                emit([thread_id, text](UI &ui) {
-                    ui.append_dictation(thread_id, text);
+                emit([this, thread, text = std::move(text)](UI &ui) {
+                    if (voice_cancelled_)
+                        return;
                     ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
-                    ui.status = "Dictation added to draft; review before sending";
+                    if (text.find_first_not_of(" \t\r\n") == std::string::npos) {
+                        ui.status = "No speech recognized";
+                    } else {
+                        ui.submitting = ui.busy = true;
+                        send(thread, text);
+                    }
                 });
             } catch (const std::exception &ex) {
                 if (audio_) {
@@ -498,12 +521,12 @@ class Engine {
                 bool retained = dictation_ && dictation_->pending() && !voice_cancelled_;
                 if (!retained)
                     dictation_.reset();
-                error(ex);
+                error(ex, diagnostics::Stage::voice);
                 emit([retained](UI &ui) {
                     ui.recording = ui.voice_working = ui.busy = false;
                     ui.voice_pending = retained;
                     ui.status = retained ? "Voice retained: Ctrl+R retry; Esc discard"
-                                         : "Recording stopped; draft unchanged";
+                                         : "Recording stopped";
                 });
             }
         });
@@ -518,6 +541,7 @@ class Engine {
             dictation_.reset();
             voice_thread_.clear();
             emit([](UI &ui) {
+                ui.retained_voice_text.clear();
                 ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
                 ui.status = "Recording discarded";
             });
@@ -580,7 +604,8 @@ int main(int argc, char **argv) {
                 config_path = argv[++i];
             else if (arg == "--help") {
                 std::cout << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen "
-                             "login|threads|projects|chat]\n  --screenshot PATH (simulator only)\n "
+                             "login|threads|projects|chat|recording]\n  --screenshot PATH "
+                             "(simulator only)\n "
                              " --self-test-ui\n";
                 return 0;
             } else
@@ -621,21 +646,21 @@ int main(int argc, char **argv) {
             check(ui.selected == 1);
             check(ui.handle({Key::enter, {}, false, false}) == Action::open);
             check(ui.page == Page::chat);
-            ui.handle({Key::text, "中文 input!", false, false});
-            check(ui.draft == "中文 input!");
-            ui.handle({Key::backspace, {}, false, false});
-            check(ui.draft == "中文 input");
-            check(ui.handle({Key::enter, {}, false, false}) == Action::send);
-            ui.busy = false; // A background read must not unlock an outstanding send.
+            check(ui.handle({Key::text, "中文 input!", false, false}) == Action::none);
+            check(ui.draft.empty());
             check(ui.handle({Key::enter, {}, false, false}) == Action::none);
-            auto sent_text = ui.draft;
-            ui.handle({Key::text, "not appended while sending", false, false});
-            check(ui.draft == sent_text);
-            ui.complete_send(ui.current.id, sent_text, true);
-            check(ui.draft == sent_text && ui.uncertain);
-            check(ui.handle({Key::enter, {}, false, false}) == Action::none);
+            ui.complete_send(ui.current.id, "spoken message", false, "voice_event");
+            check(ui.messages.back().id == "voice_event");
+            ui.update_history({});
+            check(ui.messages.size() == 1);
+            ui.update_history({{"voice_event", "user", "spoken message", false}});
+            check(ui.messages.size() == 1);
+            ui.update_history({});
+            check(ui.messages.empty());
+            ui.complete_send(ui.current.id, "uncertain voice", true);
+            check(ui.uncertain && ui.messages.empty());
             ui.reconcile_send(ui.current.id, false);
-            check(ui.draft.empty() && !ui.uncertain);
+            check(!ui.uncertain);
             ui.handle({Key::escape, {}, false, false});
             ui.handle({Key::tab, {}, false, false});
             check(ui.page == Page::projects);
@@ -644,44 +669,21 @@ int main(int argc, char **argv) {
             ui.handle({Key::enter, {}, false, false});
             check(ui.project_filter == "project_demo");
             check(ui.visible_threads().size() == 2);
-            auto shared_thread = ui.list.threads[0];
-            ui.select_thread(shared_thread);
-            ui.draft = "private unsent draft";
-            ui.handle({Key::escape, {}, false, false});
-            ui.reset_account();
-            check(ui.project_filter.empty() && !ui.submitting && !ui.voice_pending);
-            ui.select_thread(shared_thread);
-            check(ui.draft.empty());
-            ui.busy = false;
-            check(ui.handle({Key::record, {}, false, false}) == Action::voice);
-            ui.handle({Key::escape, {}, false, false});
-            check(ui.page == Page::chat && ui.recording);
-            ui.busy = false;
+            ui.select_thread(ui.list.threads[0]);
             check(ui.handle({Key::record, {}, false, false}) == Action::none);
-            ui.recording = ui.voice_working = false;
-            ui.voice_pending = true;
-            ui.handle({Key::workspace, {}, false, false});
-            check(ui.page == Page::chat);
-            ui.voice_pending = false;
-            auto other_thread = shared_thread;
-            other_thread.id = "another_thread";
-            ui.select_thread(other_thread);
-            ui.append_dictation(shared_thread.id, "speech belongs to original");
-            check(ui.draft.empty());
-            ui.select_thread(shared_thread);
-            check(ui.draft == "speech belongs to original");
-            ui.reset_account();
-            check(ui.update_safe());
-            ui.select_thread(shared_thread);
-            ui.draft = "keep this draft across threads";
+            ui.recording = true;
+            ui.render();
+            ui.update_recording_clock();
             check(!ui.update_safe());
-            ui.select_thread(other_thread);
-            check(ui.draft.empty() && !ui.update_safe());
-            ui.reset_account();
-            check(ui.update_safe());
+            check(ui.handle({Key::escape, {}, false, false}) == Action::none);
+            ui.recording = false;
             ui.voice_pending = true;
+            ui.retained_voice_text = "failed voice message";
+            check(ui.handle({Key::workspace, {}, false, false}) == Action::none);
+            check(ui.handle({Key::record, {}, false, false}) == Action::voice);
             check(!ui.update_safe());
             ui.reset_account();
+            check(ui.update_safe());
             ui.demo("chat");
         }
         auto last = std::chrono::steady_clock::now();
@@ -689,6 +691,9 @@ int main(int argc, char **argv) {
         auto next_battery_read = last;
         bool dirty = true, running = true, restart = false;
         UpdateProcess updater;
+        constexpr auto enter_hold_delay = std::chrono::milliseconds(350);
+        std::chrono::steady_clock::time_point enter_pressed{};
+        std::string enter_thread;
         if (!demo)
             updater.start(false, OKOU_ZERO_VERSION);
         while ((running && !interrupted) || updater.installing()) {
@@ -724,9 +729,49 @@ int main(int argc, char **argv) {
                     throw;
                 running = false; // Finish the confirmed install before leaving.
             }
-            for (const auto &input : inputs) {
+            for (auto input : inputs) {
                 if (updater.installing())
                     continue;
+                if (input.key == Key::escape)
+                    enter_thread.clear();
+                if (input.key == Key::enter_cancel) {
+                    enter_thread.clear();
+                    if (engine && ui.recording)
+                        engine->cancel_voice();
+                    continue;
+                }
+                if (input.key == Key::enter_down) {
+                    if (ui.page == Page::chat) {
+                        if (engine && !input.shift && !input.ctrl && !ui.current.id.empty() &&
+                            !ui.busy && !ui.recording && !ui.voice_pending && !ui.submitting &&
+                            !ui.uncertain && enter_thread.empty()) {
+                            enter_thread = ui.current.id;
+                            enter_pressed = std::chrono::steady_clock::now();
+                            ui.recording_started = {};
+                            ui.recording = ui.voice_working = ui.busy = true;
+                            engine->voice(false, ui.current);
+                            dirty = true;
+                        }
+                        continue;
+                    }
+                    input.key = Key::enter;
+                } else if (input.key == Key::enter_up) {
+                    const bool same_chat = ui.page == Page::chat && !enter_thread.empty() &&
+                                           enter_thread == ui.current.id;
+                    enter_thread.clear();
+                    if (engine && same_chat && ui.recording) {
+                        ui.recording = false;
+                        ui.voice_pending = ui.voice_working = ui.busy = true;
+                        if (std::chrono::steady_clock::now() - enter_pressed < enter_hold_delay) {
+                            engine->cancel_voice();
+                        } else {
+                            ui.status = "Transcribing...";
+                            engine->voice(true, ui.current);
+                        }
+                        dirty = true;
+                    }
+                    continue;
+                }
                 if (input.key == Key::update) {
                     if (updater.view().status == UpdateStatus::ready) {
                         if (!ui.update_safe())
@@ -747,7 +792,6 @@ int main(int argc, char **argv) {
                     dirty = true;
                     continue;
                 }
-                bool finishing_voice = ui.recording || ui.voice_pending;
                 auto action = ui.handle(input);
                 dirty = true;
                 if (action == Action::quit) {
@@ -777,11 +821,16 @@ int main(int argc, char **argv) {
                 case Action::open:
                     engine->open(ui.current);
                     break;
-                case Action::send:
-                    engine->send(ui.current, ui.draft);
-                    break;
                 case Action::voice:
-                    engine->voice(finishing_voice, ui.current.id);
+                    if (ui.retained_voice_text.empty()) {
+                        engine->voice(true, ui.current);
+                    } else {
+                        auto text = std::move(ui.retained_voice_text);
+                        ui.retained_voice_text.clear();
+                        ui.voice_pending = ui.voice_working = false;
+                        ui.submitting = true;
+                        engine->send(ui.current, text);
+                    }
                     break;
                 case Action::logout:
                     engine->logout(false);
@@ -797,6 +846,7 @@ int main(int argc, char **argv) {
                 ui.render();
                 dirty = false;
             }
+            ui.update_recording_clock();
             lv_timer_handler();
             display.present();
             if (!screenshot.empty() && now - start > std::chrono::milliseconds(600)) {

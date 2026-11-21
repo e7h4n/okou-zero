@@ -1,6 +1,7 @@
 #include "okou/ui.hpp"
 #include "emoji.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <filesystem>
 
 namespace okou {
@@ -147,8 +148,7 @@ std::vector<std::size_t> UI::visible_threads() const {
     return result;
 }
 void UI::reset_account() {
-    drafts_.clear();
-    pending_texts_.clear();
+    retained_voice_text.clear();
     list = {};
     messages.clear();
     current = {};
@@ -159,55 +159,44 @@ void UI::reset_account() {
     user_code.clear();
     verification_uri.clear();
     selected = 0;
+    acknowledged_messages_.clear();
     history_scroll_ = 0;
     busy = recording = uncertain = submitting = voice_pending = voice_working = false;
 }
-void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain) {
+void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
+                       const std::string &event_id) {
     if (current.id == thread_id) {
-        if (!was_uncertain && draft == text)
-            draft.clear();
         uncertain = was_uncertain;
+        if (!was_uncertain && !event_id.empty()) {
+            Message message{event_id, "user", text, false};
+            acknowledged_messages_.push_back(message);
+            if (acknowledged_messages_.size() > 30)
+                acknowledged_messages_.erase(acknowledged_messages_.begin());
+            messages.push_back(std::move(message));
+            history_scroll_ = 0;
+        }
     }
-    auto cached = drafts_.find(thread_id);
-    if (!was_uncertain && cached != drafts_.end() && cached->second == text)
-        drafts_.erase(cached);
-    if (was_uncertain)
-        pending_texts_[thread_id] = text;
-    else
-        pending_texts_.erase(thread_id);
     submitting = false;
+}
+void UI::update_history(std::vector<Message> history) {
+    const auto visible = [&](const Message &message) {
+        return std::any_of(history.begin(), history.end(),
+                           [&](const Message &event) { return event.id == message.id; });
+    };
+    acknowledged_messages_.erase(
+        std::remove_if(acknowledged_messages_.begin(), acknowledged_messages_.end(), visible),
+        acknowledged_messages_.end());
+    history.insert(history.end(), acknowledged_messages_.begin(), acknowledged_messages_.end());
+    messages = std::move(history);
 }
 void UI::reconcile_send(const std::string &thread_id, bool pending) {
     if (current.id == thread_id)
         uncertain = pending;
-    auto it = pending_texts_.find(thread_id);
-    if (pending || it == pending_texts_.end())
-        return;
-    if (current.id == thread_id && draft == it->second)
-        draft.clear();
-    auto cached = drafts_.find(thread_id);
-    if (cached != drafts_.end() && cached->second == it->second)
-        drafts_.erase(cached);
-    pending_texts_.erase(it);
-}
-void UI::append_dictation(const std::string &thread_id, const std::string &text) {
-    if (text.empty())
-        return;
-    auto &target = current.id == thread_id ? draft : drafts_[thread_id];
-    if (target.size() + text.size() + 1 > 128 * 1024)
-        return;
-    if (!target.empty())
-        target += ' ';
-    target += text;
 }
 void UI::select_thread(const Thread &thread) {
-    if (!current.id.empty())
-        drafts_[current.id] = draft;
-    while (drafts_.size() > 128)
-        drafts_.erase(drafts_.begin());
     current = thread;
-    draft = drafts_[current.id];
     messages.clear();
+    acknowledged_messages_.clear();
     history_scroll_ = 0;
     uncertain = false;
     page = Page::chat;
@@ -216,7 +205,7 @@ Action UI::handle(const Input &input) {
     if (input.key == Key::quit)
         return Action::quit;
     if (input.key == Key::workspace) {
-        if (recording || voice_pending)
+        if (recording || voice_pending || submitting || busy)
             return Action::none;
         page = Page::settings;
         selected = 0;
@@ -243,26 +232,12 @@ Action UI::handle(const Input &input) {
         return Action::none;
     }
     if (page == Page::chat) {
-        if (input.key == Key::escape && !recording && !voice_pending) {
-            drafts_[current.id] = draft;
+        if (input.key == Key::escape && !busy && !recording && !voice_pending && !submitting) {
             page = Page::threads;
             selected = 0;
-        } else if (input.key == Key::text && !recording && !submitting && !uncertain &&
-                   draft.size() + input.text.size() <= 16000) {
-            draft += input.text;
-        } else if (input.key == Key::backspace && !recording && !submitting && !uncertain)
-            erase_utf8(draft);
-        else if (input.key == Key::enter && input.shift && !recording && !submitting &&
-                 !uncertain && draft.size() < 16000)
-            draft += '\n';
-        else if (input.key == Key::enter && !busy && !recording && !voice_pending && !submitting &&
-                 !draft.empty() && !uncertain) {
-            submitting = true;
-            return Action::send;
-        } else if (input.key == Key::record && !busy && !submitting && !voice_working) {
+        } else if (input.key == Key::record && voice_pending && !busy && !submitting &&
+                   !voice_working && !uncertain) {
             voice_working = true;
-            if (!voice_pending)
-                recording = true;
             return Action::voice;
         } else if (input.key == Key::up || input.key == Key::page_up)
             history_scroll_ = std::min(history_scroll_ + 48, 100000);
@@ -319,11 +294,85 @@ Action UI::handle(const Input &input) {
 }
 bool UI::update_safe() const {
     return !busy && !recording && !voice_pending && !voice_working && !submitting && !uncertain &&
-           draft.empty() && pending_texts_.empty() &&
-           std::none_of(drafts_.begin(), drafts_.end(),
-                        [](const auto &entry) { return !entry.second.empty(); });
+           draft.empty() && retained_voice_text.empty();
+}
+void UI::update_recording_clock() {
+    if (!recording_clock_)
+        return;
+    const auto elapsed =
+        recording_started == std::chrono::steady_clock::time_point{}
+            ? 0L
+            : static_cast<long>(std::chrono::duration_cast<std::chrono::seconds>(
+                                    std::chrono::steady_clock::now() - recording_started)
+                                    .count());
+    if (elapsed == recording_seconds_)
+        return;
+    recording_seconds_ = elapsed;
+    char duration[16];
+    std::snprintf(duration, sizeof(duration), "%02ld:%02ld", elapsed / 60, elapsed % 60);
+    lv_label_set_text(recording_clock_, duration);
+}
+void UI::render_recording() {
+    if (recording_overlay_)
+        return;
+
+    constexpr std::uint32_t voice_background = 0x211c20;
+    constexpr std::uint32_t voice_accent = 0xf2ac8e;
+    recording_overlay_ = shape(root_, 0, 0, 320, 170, 0, voice_background);
+    auto *panel = shape(recording_overlay_, -8, 0, 336, 170, 0, voice_background);
+    recording_clock_ = label(panel, "00:00", 8, 30, 320, 0xffeee6, 26);
+    lv_obj_set_style_text_align(recording_clock_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(recording_clock_, &lv_font_montserrat_16, 0);
+    recording_seconds_ = -1;
+    update_recording_clock();
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, panel);
+    lv_anim_set_exec_cb(
+        &animation, [](void *obj, int32_t y) { lv_obj_set_y(static_cast<lv_obj_t *>(obj), y); });
+    lv_anim_set_values(&animation, 24, 0);
+    lv_anim_set_duration(&animation, 180);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+    lv_anim_start(&animation);
+
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, panel);
+    lv_anim_set_exec_cb(
+        &animation, [](void *obj, int32_t x) { lv_obj_set_x(static_cast<lv_obj_t *>(obj), x); });
+    lv_anim_set_values(&animation, -8, -13);
+    lv_anim_set_duration(&animation, 45);
+    lv_anim_set_reverse_duration(&animation, 45);
+    lv_anim_set_repeat_count(&animation, 2);
+    lv_anim_start(&animation);
+
+    constexpr int peak[] = {16, 30, 43, 53, 43, 30, 16};
+    for (int i = 0; i < 7; ++i) {
+        auto *bar = shape(panel, 129 + 12 * i, 101, 6, 9, LV_RADIUS_CIRCLE, voice_accent);
+        lv_anim_init(&animation);
+        lv_anim_set_var(&animation, bar);
+        lv_anim_set_exec_cb(&animation, [](void *obj, int32_t height) {
+            auto *bar = static_cast<lv_obj_t *>(obj);
+            lv_obj_set_height(bar, height);
+            lv_obj_set_y(bar, 106 - height / 2);
+        });
+        lv_anim_set_values(&animation, 9, peak[i]);
+        lv_anim_set_duration(&animation, 230 + 35 * (i % 3));
+        lv_anim_set_reverse_duration(&animation, 260);
+        lv_anim_set_delay(&animation, 42 * i);
+        lv_anim_set_repeat_count(&animation, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_start(&animation);
+    }
 }
 void UI::render() {
+    if (page == Page::chat && recording) {
+        render_recording();
+        return;
+    }
+    if (recording_overlay_) {
+        lv_obj_delete(recording_overlay_);
+        recording_overlay_ = recording_clock_ = nullptr;
+    }
     lv_obj_clean(header_);
     lv_obj_clean(body_);
     lv_obj_clean(footer_);
@@ -346,13 +395,11 @@ void UI::render() {
     else if (page == Page::settings)
         title = "Okou / workspace";
     auto heading = split_emoji_title(title);
-    const int heading_end = recording ? 221 : 251;
+    constexpr int heading_end = 251;
     if (emoji_->draw(header_, heading.first, 8, 3, 16))
         label(header_, heading.second, 29, 3, heading_end - 29, ink, 20);
     else
         label(header_, title, 8, 3, heading_end - 8, ink, 20);
-    if (recording)
-        label(header_, "REC", 224, 3, 28, 0xa8342b, 20);
     const auto power_color = battery.charging                                ? green
                              : battery.percent >= 0 && battery.percent <= 15 ? 0xa8342b
                                                                              : muted;
@@ -430,9 +477,6 @@ void UI::render() {
                     lv_obj_set_style_line_color(line, lv_color_hex(muted), 0);
                 } else if (thread.unread) {
                     shape(box, 294, 11, 7, 7, LV_RADIUS_CIRCLE, state_blue);
-                } else if (drafts_.count(thread.id) && !drafts_.at(thread.id).empty()) {
-                    auto *icon = label(box, LV_SYMBOL_EDIT, 290, 6, 16, muted, 17);
-                    lv_obj_set_style_text_font(icon, &lv_font_montserrat_12, 0);
                 } else if (thread.pinned) {
                     shape(box, 294, 7, 7, 7, 2, muted);
                     shape(box, 297, 12, 1, 7, 0, muted);
@@ -465,7 +509,7 @@ void UI::render() {
         auto *history = lv_obj_create(body_);
         lv_obj_remove_style_all(history);
         lv_obj_set_pos(history, 5, 0);
-        lv_obj_set_size(history, 310, 82);
+        lv_obj_set_size(history, 310, 122);
         lv_obj_set_scroll_dir(history, LV_DIR_VER);
         lv_obj_set_scrollbar_mode(history, LV_SCROLLBAR_MODE_OFF);
         int y = 0;
@@ -479,32 +523,21 @@ void UI::render() {
             y += lv_obj_get_height(text) + 8;
         }
         if (messages.empty())
-            label(history, busy ? "Loading conversation..." : "Write to Okou below", 3, 8, 299,
-                  muted);
+            label(history, busy ? "Loading conversation..." : "Hold Enter to start a voice message",
+                  3, 8, 299, muted);
         lv_obj_update_layout(history);
-        lv_obj_scroll_to_y(history, std::max(y - 82 - history_scroll_, 0), LV_ANIM_OFF);
-        auto *composer = lv_obj_create(body_);
-        lv_obj_remove_style_all(composer);
-        lv_obj_set_pos(composer, 5, 84);
-        lv_obj_set_size(composer, 310, 39);
-        lv_obj_set_style_bg_color(composer, lv_color_hex(0xffffff), 0);
-        lv_obj_set_style_bg_opa(composer, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(composer, 5, 0);
-        lv_obj_remove_flag(composer, LV_OBJ_FLAG_SCROLLABLE);
-        std::string text = recording       ? "Recording... Ctrl+R to finish"
-                           : draft.empty() ? "Message Okou..."
-                                           : draft;
-        auto *compose_text = label(composer, text, 6, 3, 298, draft.empty() ? muted : ink);
-        lv_obj_update_layout(compose_text);
-        if (lv_obj_get_height(compose_text) > 33)
-            lv_obj_set_y(compose_text, 33 - lv_obj_get_height(compose_text));
+        lv_obj_scroll_to_y(history, std::max(y - 122 - history_scroll_, 0), LV_ANIM_OFF);
+        const bool voice_feedback = status == "No speech recognized" ||
+                                    status == "Voice send failed" || status == "Message accepted" ||
+                                    status == "Recording stopped" ||
+                                    status == "Recording discarded";
         help = uncertain                ? "Send uncertain: refresh history; do not resend"
                : voice_pending && !busy ? "Voice retained: Ctrl+R retry   Esc discard"
                : submitting             ? "Sending... please wait"
-               : busy                   ? status
-                                        : "Enter send   Ctrl+R voice   Esc back";
+               : recording || busy || voice_feedback ? status
+                                                     : "Hold Enter to record";
     }
-    if (!update_message.empty())
+    if (!update_message.empty() && page != Page::chat)
         help = update_message;
     auto *footer_text = label(footer_, help, 5, 3, 310, muted, 15);
     lv_obj_set_style_text_font(footer_text, &lv_font_montserrat_12, 0);
@@ -529,11 +562,14 @@ void UI::demo(const std::string &screen) {
         user_code = "DEMO-CODE";
         verification_uri = "https://example.invalid/activate";
         status = "Demo only - this is not a real sign-in code";
-    } else if (screen == "chat") {
+    } else if (screen == "chat" || screen == "recording") {
         select_thread(list.threads[1]);
         messages = {{"event_1", "user", "帮我整理今天要做的事", false},
                     {"event_2", "assistant", "当然。我们先从最重要的一件事开始。", true}};
-        draft = "Let's start with the prototype";
+        if (screen == "recording") {
+            recording = true;
+            recording_started = std::chrono::steady_clock::now();
+        }
     } else
         page = Page::threads;
     if (screen == "update")

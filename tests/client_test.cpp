@@ -363,11 +363,10 @@ void history_test() {
                     get(rows_path(3, id(3)), tail(Json::array({d, end}), 5, id(5))),
                     get(rows_path(5, id(5)), tail(Json::array(), 5, id(5)))});
     auto messages = f.client().history(thread_id);
-    check(messages.size() == 3, "revoked event removed");
+    check(messages.size() == 2, "Revoked and successful completion rows hidden");
     check(messages[0].role == "user" && messages[0].text == "Hello", "user presentation");
     check(messages[1].text == "Visible answer" && messages[1].terminal,
           "assistant terminal evidence");
-    check(messages[2].terminal, "terminal marker");
     f.server.finish();
 }
 template <class Fn> void throws(Fn fn, const std::string &what) {
@@ -462,10 +461,7 @@ void bad_history_tests() {
     }
 }
 Json metadata() {
-    return {{"id", thread_id},
-            {"agentId", agent},
-            {"computerUseHostId", nullptr},
-            {"cloudBrowserEnabled", true}};
+    return {{"id", thread_id}, {"computerUseHostId", nullptr}, {"cloudBrowserEnabled", true}};
 }
 okou::Thread thread() {
     okou::Thread t;
@@ -486,7 +482,7 @@ void send_test() {
                         sent_id = j.at("clientEventId");
                         sort = j.at("chatThreadSortEventId");
                         check(j.at("prompt") == prompt && j.at("threadId") == thread_id &&
-                                  j.at("agentId") == agent,
+                                  !j.contains("agentId"),
                               "send canonical body");
                         check(j["userMessage"]["version"] == 1 &&
                                   j["userMessage"]["parts"][0]["type"] == "text" &&

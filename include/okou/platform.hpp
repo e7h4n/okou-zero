@@ -11,6 +11,9 @@ enum class Key {
     none,
     text,
     enter,
+    enter_down,
+    enter_up,
+    enter_cancel,
     backspace,
     escape,
     up,
@@ -61,6 +64,7 @@ class Keyboard {
 
   private:
     bool desktop_, shift_ = false, ctrl_ = false, caps_ = false;
+    bool input_dropped_ = false;
     int fd_ = -1;
     std::unique_ptr<UpdateShortcut> update_shortcut_;
 };

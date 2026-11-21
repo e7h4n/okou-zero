@@ -13,6 +13,8 @@ enum class Stage {
     refresh,
     logout_revocation,
     application,
+    chat_send,
+    voice,
     startup
 };
 // Every returned string is a compiled constant, never provider-controlled text.

@@ -62,6 +62,10 @@ const char *stage_name(Stage stage) noexcept {
         return "logout_revocation";
     case Stage::application:
         return "application";
+    case Stage::chat_send:
+        return "chat_send";
+    case Stage::voice:
+        return "voice";
     case Stage::startup:
         return "startup";
     }
@@ -112,6 +116,15 @@ const char *reason(const std::exception &error) noexcept {
         {"HTTP initialization failed", "http_initialization_failed"},
         {"Request identity generation failed", "request_identity_failed"},
         {"Invalid JSON response", "invalid_json_response"},
+        {"Invalid or oversized server protocol response", "invalid_server_protocol"},
+        {"Invalid thread identity", "invalid_thread_identity"},
+        {"Cannot reserve pending send identity", "send_reservation_failed"},
+        {"Cannot persist pending send identity", "send_identity_write_failed"},
+        {"Cannot durably persist pending send identity", "send_identity_sync_failed"},
+        {"Enter a bounded nonempty message", "invalid_message_size"},
+        {"Secure random source unavailable", "random_source_unavailable"},
+        {"Dictation transcription failed; retry explicitly", "voice_transcription_failed"},
+        {"Dictation polishing failed; retry explicitly", "voice_polish_failed"},
         {"Request cancelled", "cancelled"},
         {"Invalid HTTP method", "invalid_http_method"},
         {"Invalid request URL", "invalid_request_url"},
