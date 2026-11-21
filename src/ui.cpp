@@ -159,16 +159,25 @@ void UI::reset_account() {
     user_code.clear();
     verification_uri.clear();
     selected = 0;
+    acknowledged_messages_.clear();
     history_scroll_ = 0;
     push_to_talk = busy = recording = uncertain = submitting = voice_pending = voice_working =
         false;
 }
 void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
-                       bool preserve_draft) {
+                       bool preserve_draft, const std::string &event_id) {
     if (current.id == thread_id) {
         if (!preserve_draft && !was_uncertain && draft == text)
             draft.clear();
         uncertain = was_uncertain;
+        if (!was_uncertain && !event_id.empty() && preserve_draft) {
+            Message message{event_id, "user", text, false};
+            acknowledged_messages_.push_back(message);
+            if (acknowledged_messages_.size() > 30)
+                acknowledged_messages_.erase(acknowledged_messages_.begin());
+            messages.push_back(std::move(message));
+            history_scroll_ = 0;
+        }
     }
     auto cached = drafts_.find(thread_id);
     if (!preserve_draft && !was_uncertain && cached != drafts_.end() && cached->second == text)
@@ -178,6 +187,17 @@ void UI::complete_send(const std::string &thread_id, const std::string &text, bo
     else
         pending_texts_.erase(thread_id);
     submitting = false;
+}
+void UI::update_history(std::vector<Message> history) {
+    const auto visible = [&](const Message &message) {
+        return std::any_of(history.begin(), history.end(),
+                           [&](const Message &event) { return event.id == message.id; });
+    };
+    acknowledged_messages_.erase(
+        std::remove_if(acknowledged_messages_.begin(), acknowledged_messages_.end(), visible),
+        acknowledged_messages_.end());
+    history.insert(history.end(), acknowledged_messages_.begin(), acknowledged_messages_.end());
+    messages = std::move(history);
 }
 void UI::reconcile_send(const std::string &thread_id, bool pending) {
     if (current.id == thread_id)
@@ -210,6 +230,7 @@ void UI::select_thread(const Thread &thread) {
     current = thread;
     draft = drafts_[current.id];
     messages.clear();
+    acknowledged_messages_.clear();
     history_scroll_ = 0;
     uncertain = false;
     page = Page::chat;
@@ -505,15 +526,18 @@ void UI::render() {
         if (lv_obj_get_height(compose_text) > 33)
             lv_obj_set_y(compose_text, 33 - lv_obj_get_height(compose_text));
         const bool voice_feedback = status == "No speech recognized" ||
-                                    status == "Voice send failed; transcript added to draft" ||
+                                    status == "Voice send failed; transcript in draft" ||
+                                    status == "Message accepted" ||
                                     status == "Recording stopped; draft unchanged";
         help = uncertain                ? "Send uncertain: refresh history; do not resend"
                : voice_pending && !busy ? "Voice retained: Ctrl+R retry   Esc discard"
                : submitting             ? "Sending... please wait"
-               : busy || voice_feedback ? status
-                                        : "Enter send   Hold Enter voice   Esc back";
+               : recording || busy || voice_feedback ? status
+                                                     : "Enter send   Hold Enter voice   Esc back";
     }
-    if (!update_message.empty())
+    const bool chat_feedback = page == Page::chat && (recording || voice_pending || submitting ||
+                                                      busy || uncertain || help == status);
+    if (!update_message.empty() && !chat_feedback)
         help = update_message;
     auto *footer_text = label(footer_, help, 5, 3, 310, muted, 15);
     lv_obj_set_style_text_font(footer_text, &lv_font_montserrat_12, 0);

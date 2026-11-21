@@ -71,8 +71,9 @@ class Engine {
             s.client->set_tokens(s.tokens);
         }
     }
-    void error(const std::exception &ex) {
-        diagnostics::log_error(diagnostics::Stage::application, ex);
+    void error(const std::exception &ex,
+               diagnostics::Stage stage = diagnostics::Stage::application) {
+        diagnostics::log_error(stage, ex);
         const auto *http = dynamic_cast<const HttpError *>(&ex);
         long status = http ? http->status : 0;
         std::string text = status == 401   ? "Sign-in expired; sign in again"
@@ -385,10 +386,11 @@ class Engine {
             emit([id, messages = std::move(messages), pending](UI &ui) mutable {
                 ui.reconcile_send(id, pending);
                 if (ui.current.id == id) {
-                    ui.messages = std::move(messages);
+                    ui.update_history(std::move(messages));
                     if (!ui.recording && !ui.voice_pending && !ui.submitting) {
                         ui.busy = false;
-                        ui.status = pending ? "Send uncertain; do not resend" : "Up to date";
+                        if (pending)
+                            ui.status = "Send uncertain; do not resend";
                     }
                 }
             });
@@ -419,8 +421,9 @@ class Engine {
                     ensure(*s);
                     result = s->client->send(thread, text);
                 }
-                emit([id = thread.id, text, uncertain = result.uncertain, preserve_draft](UI &ui) {
-                    ui.complete_send(id, text, uncertain, preserve_draft);
+                emit([id = thread.id, text, result = std::move(result), preserve_draft](UI &ui) {
+                    const bool uncertain = result.uncertain;
+                    ui.complete_send(id, text, uncertain, preserve_draft, result.client_event_id);
                     ui.busy = false;
                     ui.status = uncertain ? "Send uncertain; do not resend" : "Message accepted";
                 });
@@ -429,12 +432,12 @@ class Engine {
                 refresh_indicators();
             } catch (const std::exception &ex) {
                 sending_ = false;
-                error(ex);
+                error(ex, diagnostics::Stage::chat_send);
                 emit([id = thread.id, text, preserve_draft](UI &ui) {
                     ui.submitting = false;
                     if (preserve_draft) {
                         ui.append_dictation(id, text);
-                        ui.status = "Voice send failed; transcript added to draft";
+                        ui.status = "Voice send failed; transcript in draft";
                     }
                 });
             }
@@ -526,7 +529,7 @@ class Engine {
                 bool retained = dictation_ && dictation_->pending() && !voice_cancelled_;
                 if (!retained)
                     dictation_.reset();
-                error(ex);
+                error(ex, diagnostics::Stage::voice);
                 emit([retained](UI &ui) {
                     ui.push_to_talk = ui.recording = ui.voice_working = ui.busy = false;
                     ui.voice_pending = retained;
@@ -666,8 +669,14 @@ int main(int argc, char **argv) {
             ui.reconcile_send(ui.current.id, false);
             check(ui.draft.empty() && !ui.uncertain);
             ui.draft = sent_text;
-            ui.complete_send(ui.current.id, sent_text, false, true);
-            check(ui.draft == sent_text);
+            ui.complete_send(ui.current.id, sent_text, false, true, "voice_event");
+            check(ui.draft == sent_text && ui.messages.back().id == "voice_event");
+            ui.update_history({});
+            check(ui.messages.size() == 1 && ui.messages.back().id == "voice_event");
+            ui.update_history({{"voice_event", "user", sent_text, false}});
+            check(ui.messages.size() == 1);
+            ui.update_history({});
+            check(ui.messages.empty());
             ui.complete_send(ui.current.id, sent_text, true, true);
             ui.reconcile_send(ui.current.id, false);
             check(ui.draft == sent_text && !ui.uncertain);

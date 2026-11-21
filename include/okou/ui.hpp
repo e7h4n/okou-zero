@@ -42,7 +42,8 @@ class UI {
     void select_thread(const Thread &thread);
     void reset_account();
     void complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
-                       bool preserve_draft = false);
+                       bool preserve_draft = false, const std::string &event_id = {});
+    void update_history(std::vector<Message> history);
     void append_dictation(const std::string &thread_id, const std::string &text);
     void reconcile_send(const std::string &thread_id, bool pending);
     std::vector<std::size_t> visible_threads() const;
@@ -56,6 +57,7 @@ class UI {
     lv_font_t *detail_font_ = nullptr;
     std::unique_ptr<EmojiRenderer> emoji_;
     int history_scroll_ = 0;
+    std::vector<Message> acknowledged_messages_;
     std::map<std::string, std::string> drafts_;
     std::map<std::string, std::string> pending_texts_;
     lv_obj_t *label(lv_obj_t *parent, const std::string &text, int x, int y, int width,
