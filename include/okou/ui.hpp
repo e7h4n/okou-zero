@@ -19,7 +19,6 @@ class UI {
     bool busy = false, recording = false, uncertain = false;
     bool submitting = false, voice_pending = false, voice_working = false;
     std::chrono::steady_clock::time_point recording_started{};
-    std::string retained_voice_text;
     int selected = 0;
     explicit UI(lv_display_t *display);
     ~UI();

@@ -688,6 +688,57 @@ std::map<std::string, std::string> multipart(const Request &r) {
     }
     return parts;
 }
+void voice_message_test() {
+    Fixture f;
+    const std::string file_id = "aaaaaaaa-1111-4000-8000-111111111111";
+    const auto upload_url = f.server.origin() + "/storage/voice?signature=a%2Bb";
+    f.server.start({
+        [&](const Request &r) {
+            api_request(r, "POST", "/api/uploads/prepare/private");
+            check(Json::parse(r.body) == Json({{"filename", "recording.wav"},
+                                               {"contentType", "audio/wav"},
+                                               {"size", 48}}),
+                  "prepare private WAV");
+            return json({{"id", file_id},
+                         {"uploadUrl", upload_url},
+                         {"uploadHeaders", {{"x-amz-meta-test", "signed"}}}});
+        },
+        [](const Request &r) {
+            check(r.method == "PUT" && r.target == "/storage/voice?signature=a%2Bb",
+                  "PUT preserves signed URL");
+            check(!r.headers.count("authorization") && !r.headers.count("x-client-type"),
+                  "OAuth credentials stay on the API origin");
+            check(r.headers.at("content-type") == "audio/wav" &&
+                      r.headers.at("x-amz-meta-test") == "signed" && r.body.size() == 48 &&
+                      r.body.substr(0, 4) == "RIFF",
+                  "signed headers and WAV body");
+            return json({});
+        },
+        [&](const Request &r) {
+            api_request(r, "POST", "/api/uploads/complete");
+            check(Json::parse(r.body).at("id") == file_id, "complete uploaded file");
+            return json({{"id", file_id}});
+        },
+        get(base() + "/metadata", metadata()),
+        [&](const Request &r) {
+            api_request(r, "POST", "/api/chat/events");
+            auto body = Json::parse(r.body);
+            const Json expected = {{"type", "voice"},
+                                   {"clips", Json::array({{{"fileId", file_id}}})}};
+            check(body.at("threadId") == thread_id && body.at("hasTextContent") == false &&
+                      body.at("prompt") == "(see message parts)" &&
+                      body.at("userMessage") ==
+                          Json({{"version", 1}, {"parts", Json::array({expected})}}),
+                  "send a voice-only message to the fixed chat");
+            return json({{"threadId", thread_id}});
+        },
+    });
+    auto c = f.client();
+    auto uploaded = c.upload_voice({42, -42});
+    check(uploaded == file_id && !c.send_voice(thread(), uploaded).uncertain,
+          "voice upload accepted by chat");
+    f.server.finish();
+}
 void voice_test() {
     Fixture f;
     std::vector<std::int16_t> pcm(16000, 42);
@@ -790,6 +841,7 @@ int main() {
         send_rejection_test();
         uncertain_absence_test();
         voice_test();
+        voice_message_test();
         read_and_token_test();
         security_test();
         std::cout << "client protocol tests passed\n";

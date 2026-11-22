@@ -53,7 +53,7 @@ class Http {
   public:
     explicit Http(std::atomic_bool *cancelled = nullptr);
     HttpResponse request(const std::string &method, const std::string &url,
-                         const std::string &body = {}, const std::string &bearer = {},
+                         std::string_view body = {}, const std::string &bearer = {},
                          const std::map<std::string, std::string> &headers = {},
                          const std::vector<UploadPart> &parts = {}, std::FILE *output = nullptr);
     static std::string encode(const std::string &value);
@@ -135,6 +135,8 @@ class Client {
     bool has_pending_send(const std::string &thread_id) const;
     SendResult send(const Thread &thread, const std::string &text,
                     const std::string &client_event_id = {});
+    std::string upload_voice(const std::vector<std::int16_t> &pcm);
+    SendResult send_voice(const Thread &thread, const std::string &file_id);
     std::string transcribe(const std::vector<std::int16_t> &pcm, const std::string &previous,
                            double overlap_seconds);
     std::string polish(const std::vector<std::string> &segments);
@@ -145,6 +147,8 @@ class Client {
     Config config_;
     Http &http_;
     Tokens tokens_;
+    SendResult send_message(const Thread &thread, const std::string &prompt, const Json &part,
+                            bool has_text, const std::string &requested_id);
     Json api(const std::string &method, const std::string &path, const Json &body = nullptr);
     HttpResponse snapshot_response(const std::string &url, std::FILE *output = nullptr);
     Json snapshot(const std::string &url, bool ndjson);

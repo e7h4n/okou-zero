@@ -1,6 +1,5 @@
 #include "emoji.hpp"
 #include "okou/diagnostics.hpp"
-#include "okou/dictation.hpp"
 #include "okou/ui.hpp"
 #include "update_process.hpp"
 #include <algorithm>
@@ -34,9 +33,10 @@ class Engine {
     std::shared_ptr<Session> session_;
     std::unique_ptr<Realtime> realtime_;
     std::unique_ptr<AudioCapture> audio_;
-    std::unique_ptr<Dictation> dictation_;
+    std::vector<std::int16_t> voice_pcm_;
+    std::string voice_file_id_;
     std::string voice_thread_;
-    std::atomic_bool sending_{false}, voice_cancelled_{false};
+    std::atomic_bool voice_cancelled_{false};
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::function<void()>> tasks_;
@@ -345,40 +345,6 @@ class Engine {
             });
         });
     }
-    void send(const Thread &thread, const std::string &text) {
-        if (sending_.exchange(true))
-            return;
-        enqueue([this, thread, text] {
-            try {
-                auto s = std::atomic_load(&session_);
-                SendResult result;
-                {
-                    std::lock_guard<std::mutex> guard(s->io);
-                    ensure(*s);
-                    result = s->client->send(thread, text);
-                }
-                emit([id = thread.id, text, result = std::move(result)](UI &ui) {
-                    const bool uncertain = result.uncertain;
-                    ui.complete_send(id, text, uncertain, result.client_event_id);
-                    ui.busy = false;
-                    ui.status = uncertain ? "Send uncertain; do not resend" : "Message accepted";
-                });
-                sending_ = false;
-                refresh_history();
-            } catch (const std::exception &ex) {
-                sending_ = false;
-                error(ex, diagnostics::Stage::chat_send);
-                emit([id = thread.id, text](UI &ui) {
-                    ui.submitting = false;
-                    if (ui.current.id == id) {
-                        ui.retained_voice_text = text;
-                        ui.voice_pending = true;
-                        ui.status = "Voice send failed";
-                    }
-                });
-            }
-        });
-    }
     void voice(bool finish, const Thread &thread) {
         if (!finish)
             voice_cancelled_ = false;
@@ -404,62 +370,56 @@ class Engine {
                 if (voice_thread_ != thread_id)
                     throw std::runtime_error("Recording belongs to another chat");
                 if (audio_) {
-                    auto pcm = audio_->finish();
+                    voice_pcm_ = audio_->finish();
                     audio_.reset();
-                    dictation_ = std::make_unique<Dictation>(thread_id, std::move(pcm));
                 }
-                if (!dictation_) {
+                if (voice_pcm_.empty() && voice_file_id_.empty()) {
                     emit([](UI &ui) {
                         ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
+                        ui.status = "No audio recorded";
                     });
                     return;
                 }
-                emit([](UI &ui) {
-                    ui.recording = false;
-                    ui.voice_pending = true;
-                    ui.busy = true;
-                    ui.status = "Transcribing...";
-                });
-                auto text = dictation_->process(
-                    [this, s](const std::vector<std::int16_t> &pcm, const std::string &previous,
-                              double overlap) {
-                        std::lock_guard<std::mutex> guard(s->io);
-                        ensure(*s);
-                        return s->client->transcribe(pcm, previous, overlap);
-                    },
-                    [this, s](const std::vector<std::string> &segments) {
-                        if (segments.size() == 1)
-                            return segments.front();
-                        std::lock_guard<std::mutex> guard(s->io);
-                        ensure(*s);
-                        return s->client->polish(segments);
-                    },
-                    [this] { return stopping_.load() || voice_cancelled_.load(); });
                 if (voice_cancelled_ || stopping_)
                     return;
-                dictation_.reset();
-                emit([this, thread, text = std::move(text)](UI &ui) {
-                    if (voice_cancelled_)
-                        return;
-                    ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
-                    if (text.find_first_not_of(" \t\r\n") == std::string::npos) {
-                        ui.status = "No speech recognized";
-                    } else {
-                        ui.submitting = ui.busy = true;
-                        send(thread, text);
-                    }
+                emit([](UI &ui) {
+                    ui.recording = ui.voice_pending = ui.voice_working = false;
+                    ui.submitting = ui.busy = true;
+                    ui.status = "Sending voice message...";
                 });
+                SendResult result;
+                {
+                    std::lock_guard<std::mutex> guard(s->io);
+                    ensure(*s);
+                    if (!s->client->has_pending_send(thread_id) && voice_file_id_.empty()) {
+                        voice_file_id_ = s->client->upload_voice(voice_pcm_);
+                        voice_pcm_ = std::vector<std::int16_t>();
+                    }
+                    if (voice_cancelled_ || stopping_)
+                        return;
+                    result = voice_file_id_.empty() ? SendResult{"", true}
+                                                    : s->client->send_voice(thread, voice_file_id_);
+                }
+                voice_file_id_.clear();
+                voice_pcm_ = std::vector<std::int16_t>();
+                emit([id = thread_id, result = std::move(result)](UI &ui) {
+                    ui.complete_send(id, "[Voice message]", result.uncertain,
+                                     result.client_event_id);
+                    ui.busy = false;
+                    ui.status =
+                        result.uncertain ? "Send uncertain; do not resend" : "Message accepted";
+                });
+                refresh_history();
             } catch (const std::exception &ex) {
                 if (audio_) {
                     audio_->cancel();
                     audio_.reset();
                 }
-                bool retained = dictation_ && dictation_->pending() && !voice_cancelled_;
-                if (!retained)
-                    dictation_.reset();
+                bool retained =
+                    (!voice_pcm_.empty() || !voice_file_id_.empty()) && !voice_cancelled_;
                 error(ex, diagnostics::Stage::voice);
                 emit([retained](UI &ui) {
-                    ui.recording = ui.voice_working = ui.busy = false;
+                    ui.recording = ui.voice_working = ui.submitting = ui.busy = false;
                     ui.voice_pending = retained;
                     ui.status = retained ? "Voice retained: Ctrl+R retry; Esc discard"
                                          : "Recording stopped";
@@ -474,11 +434,12 @@ class Engine {
                 audio_->cancel();
                 audio_.reset();
             }
-            dictation_.reset();
+            voice_pcm_ = std::vector<std::int16_t>();
+            voice_file_id_.clear();
             voice_thread_.clear();
             emit([](UI &ui) {
-                ui.retained_voice_text.clear();
                 ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
+                ui.submitting = false;
                 ui.status = "Recording discarded";
             });
         });
@@ -490,7 +451,8 @@ class Engine {
                 audio_->cancel();
                 audio_.reset();
             }
-            dictation_.reset();
+            voice_pcm_ = std::vector<std::int16_t>();
+            voice_file_id_.clear();
             voice_thread_.clear();
             auto s = std::atomic_load(&session_);
             {
@@ -607,7 +569,6 @@ int main(int argc, char **argv) {
             check(ui.handle({Key::escape, {}, false, false}) == Action::none);
             ui.recording = false;
             ui.voice_pending = true;
-            ui.retained_voice_text = "failed voice message";
             check(ui.handle({Key::workspace, {}, false, false}) == Action::none);
             check(ui.handle({Key::record, {}, false, false}) == Action::voice);
             check(!ui.update_safe());
@@ -694,7 +655,7 @@ int main(int argc, char **argv) {
                         if (std::chrono::steady_clock::now() - enter_pressed < enter_hold_delay) {
                             engine->cancel_voice();
                         } else {
-                            ui.status = "Transcribing...";
+                            ui.status = "Sending voice message...";
                             engine->voice(true, ui.current);
                         }
                         dirty = true;
@@ -742,15 +703,7 @@ int main(int argc, char **argv) {
                     engine->open_fixed_chat();
                     break;
                 case Action::voice:
-                    if (ui.retained_voice_text.empty()) {
-                        engine->voice(true, ui.current);
-                    } else {
-                        auto text = std::move(ui.retained_voice_text);
-                        ui.retained_voice_text.clear();
-                        ui.voice_pending = ui.voice_working = false;
-                        ui.submitting = true;
-                        engine->send(ui.current, text);
-                    }
+                    engine->voice(true, ui.current);
                     break;
                 case Action::logout:
                     engine->logout(false);

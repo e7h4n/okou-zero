@@ -117,7 +117,6 @@ lv_obj_t *UI::row(const std::string &title, const std::string &detail, int y, bo
     return box;
 }
 void UI::reset_account() {
-    retained_voice_text.clear();
     messages.clear();
     current = {};
     draft.clear();
@@ -235,7 +234,7 @@ Action UI::handle(const Input &input) {
 }
 bool UI::update_safe() const {
     return !busy && !recording && !voice_pending && !voice_working && !submitting && !uncertain &&
-           draft.empty() && retained_voice_text.empty();
+           draft.empty();
 }
 void UI::update_recording_clock() {
     if (!recording_clock_)
