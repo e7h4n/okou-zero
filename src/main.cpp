@@ -658,6 +658,9 @@ int main(int argc, char **argv) {
         auto start = last;
         auto next_battery_read = last;
         bool dirty = true, running = true, restart = false;
+        // On the LCD the previous frame is the launcher wallpaper. Keep it on
+        // glass until initialization produces chat, login, setup, or an error.
+        bool awaiting_first_screen = !OKOU_ZERO_DESKTOP && !demo;
         UpdateProcess updater;
         constexpr auto enter_hold_delay = std::chrono::milliseconds(350);
         std::chrono::steady_clock::time_point enter_pressed{};
@@ -704,6 +707,15 @@ int main(int argc, char **argv) {
                     throw;
                 running = false; // Finish the confirmed install before leaving.
             }
+            if (awaiting_first_screen && ui.busy) {
+                for (const auto &input : inputs) {
+                    if (input.key == Key::quit || input.key == Key::escape)
+                        running = false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            awaiting_first_screen = false;
             for (auto input : inputs) {
                 if (updater.installing())
                     continue;
