@@ -28,7 +28,7 @@ This is a narrow subscriber, **not a full Ably SDK**: no publishing, presence, m
 
 ## ALSA capture and WAV
 
-The hardware-proven device supplied by main is `plughw:CARD=ES8389Audio,DEV=0`. `AudioCapture(device)` does not open a device or start recording. Only explicit `start()` opens `SND_PCM_STREAM_CAPTURE` with `SND_PCM_NONBLOCK` and configures exactly 16,000 Hz, mono, signed 16-bit little-endian, interleaved samples. Unsupported configurations fail rather than silently resampling incorrectly.
+The default capture device is the ALSA `pulse` PCM. It uses the PulseAudio server’s default input (PipeWire on Cardputer Zero). On the ES8389 this selected 48 kHz stereo S32_LE hardware capture and avoided the waveform jumps observed with direct S24_LE capture. An explicit `capture_device` or `OKOU_ZERO_CAPTURE_DEVICE` still overrides the default. `AudioCapture(device)` does not open a device or start recording. Only explicit `start()` opens `SND_PCM_STREAM_CAPTURE` with `SND_PCM_NONBLOCK` and configures exactly 16,000 Hz, mono, signed 16-bit little-endian, interleaved samples. Unsupported configurations fail rather than silently resampling incorrectly.
 
 The capture worker reads 512-frame chunks and uses waits of at most 50 ms. Overruns prepare the device again; suspend/fatal errors discard the recording and are reported by `finish()`. There is no potentially unbounded ALSA suspend/resume retry loop. A stop flag is inspected each iteration. Normal finish/cancel joins after the bounded poll, then drops and closes the PCM handle; a driver/kernel stuck in its own call remains outside userspace's hard deadline control.
 

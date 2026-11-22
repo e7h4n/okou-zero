@@ -18,6 +18,7 @@ case "$(uname -m):$expected_arch" in
   x86_64:amd64|aarch64:arm64) ;;
   *) echo 'Unsupported native runner architecture' >&2; exit 1 ;;
 esac
+[[ $(dpkg-deb --field "$package" Pre-Depends) == libasound2-plugins ]]
 dependencies=$(dpkg-deb --field "$package" Depends)
 for dependency in ca-certificates fonts-noto-cjk python3 openssl sudo; do
   grep -Eq "(^|,)[[:space:]]*${dependency}([[:space:]]*\\([^)]*\\))?[[:space:]]*(,|$)" <<< "$dependencies"

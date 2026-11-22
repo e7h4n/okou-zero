@@ -29,6 +29,8 @@ sudo -n /usr/libexec/okou-zero-update-install
 
 The sudo rule grants only that root-owned program with **zero arguments**, to existing members of the local `sudo` group. It grants no arbitrary shell, URL, filesystem path or `dpkg` command. The helper also rejects arguments and non-root execution. Python runs in isolated mode and loads shared code only from a fixed root-owned absolute path; subprocess environments are rebuilt.
 
+When upgrading an existing installation, install the PulseAudio PCM plugin once with `sudo apt-get install libasound2-plugins` before applying the signed update. A fresh installation with `apt install ./okou-zero_*.deb` resolves this prerequisite automatically.
+
 The root helper takes an exclusive update lock, copies bounded stdin into a fresh root-only directory, independently verifies the signature, full payload SHA-256 and length, exact Debian Package/Version/Architecture, and that the installed package is fully configured and older. Only then does it run fixed `/usr/bin/dpkg --install` on the root-owned verified copy. It does not trust filenames or paths supplied by the user or manifest. It does not download arbitrary dependencies, retry a locked/failed package manager, or run user-supplied commands.
 
 ## Release procedure
