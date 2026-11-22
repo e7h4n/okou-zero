@@ -6,7 +6,17 @@
 namespace okou {
 class EmojiRenderer;
 enum class Page { login, setup, chat, settings };
-enum class Action { none, login, configure, refresh, voice, switch_workspace, logout, quit };
+enum class Action {
+    none,
+    login,
+    configure,
+    refresh,
+    voice,
+    playback,
+    switch_workspace,
+    logout,
+    quit
+};
 class UI {
   public:
     Page page = Page::login;
@@ -14,7 +24,8 @@ class UI {
     Thread current;
     std::string draft, status = "Sign in to continue", user_id, org_id;
     std::string user_code, verification_uri;
-    std::string update_message;
+    std::string update_message, playback_status;
+    std::vector<std::string> visible_voice_clips;
     BatteryStatus battery;
     bool busy = false, recording = false, uncertain = false;
     bool submitting = false, voice_pending = false, voice_working = false;

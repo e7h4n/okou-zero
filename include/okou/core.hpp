@@ -55,7 +55,8 @@ class Http {
     HttpResponse request(const std::string &method, const std::string &url,
                          std::string_view body = {}, const std::string &bearer = {},
                          const std::map<std::string, std::string> &headers = {},
-                         const std::vector<UploadPart> &parts = {}, std::FILE *output = nullptr);
+                         const std::vector<UploadPart> &parts = {}, std::FILE *output = nullptr,
+                         std::size_t body_limit = 16U * 1024U * 1024U);
     static std::string encode(const std::string &value);
 
   private:
@@ -111,6 +112,7 @@ struct Thread {
 struct Message {
     std::string id, role, text;
     bool terminal = false;
+    std::vector<std::string> voice_clips{};
 };
 struct ListState {
     std::vector<Thread> threads;
@@ -135,6 +137,7 @@ class Client {
     bool has_pending_send(const std::string &thread_id) const;
     SendResult send(const Thread &thread, const std::string &text,
                     const std::string &client_event_id = {});
+    std::string voice_playback_url(const std::string &file_id);
     std::string upload_voice(const std::vector<std::int16_t> &pcm);
     SendResult send_voice(const Thread &thread, const std::string &file_id);
     std::string transcribe(const std::vector<std::int16_t> &pcm, const std::string &previous,
@@ -170,6 +173,7 @@ class Realtime {
     std::unique_ptr<Impl> impl_;
 };
 std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm);
+void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop);
 class AudioCapture {
   public:
     explicit AudioCapture(std::string device);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Independent implementation of the documented public HTTP wire contracts.
+#include "disk_file.hpp"
 #include "okou/core.hpp"
 #include <algorithm>
 #include <cmath>
@@ -117,6 +118,18 @@ std::string assistant_text(const std::string &content) {
     // JSON/code responses without tool/action discriminators remain ordinary text.
     return plain();
 }
+bool is_uuid(const std::string &s) {
+    if (s.size() != 36)
+        return false;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (s[i] != '-')
+                return false;
+        } else if (!std::isxdigit(static_cast<unsigned char>(s[i])))
+            return false;
+    }
+    return true;
+}
 Json visible_row(const Json &row) {
     Json safe = Json::object();
     for (const char *k : {"id", "chatThreadId", "seqId", "eventType", "runId", "revokesEventId"})
@@ -138,12 +151,25 @@ Json visible_row(const Json &row) {
             for (const auto &part : doc["parts"]) {
                 if (parts.size() >= 128 || bytes >= 32768)
                     break;
-                if (str(part, "type") == "text") {
+                const auto kind = str(part, "type");
+                if (kind == "source" || kind == "additional_info" || kind == "automation" ||
+                    kind == "model")
+                    continue;
+                if (kind == "text") {
                     auto text = clipped(str(part, "text"), 32768 - bytes);
                     bytes += text.size();
                     parts.push_back({{"type", "text"}, {"text", text}});
-                } else if (str(part, "type") == "voice") {
-                    parts.push_back({{"type", "voice"}});
+                } else if (kind == "voice") {
+                    Json clips = Json::array();
+                    if (part.contains("clips") && part["clips"].is_array())
+                        for (const auto &clip : part["clips"]) {
+                            if (clips.size() == 32)
+                                break;
+                            auto file_id = str(clip, "fileId");
+                            if (is_uuid(file_id))
+                                clips.push_back(file_id);
+                        }
+                    parts.push_back({{"type", "voice"}, {"clips", std::move(clips)}});
                 } else {
                     parts.push_back({{"type", "unsupported"}});
                 }
@@ -152,18 +178,6 @@ Json visible_row(const Json &row) {
     }
     safe["payload"] = std::move(payload);
     return safe;
-}
-bool is_uuid(const std::string &s) {
-    if (s.size() != 36)
-        return false;
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        if (i == 8 || i == 13 || i == 18 || i == 23) {
-            if (s[i] != '-')
-                return false;
-        } else if (!std::isxdigit(static_cast<unsigned char>(s[i])))
-            return false;
-    }
-    return true;
 }
 std::string tid(const std::string &id) {
     if (!is_uuid(id))
@@ -181,41 +195,8 @@ Json parsed(const std::string &s) {
         invalid();
     }
 }
-// /tmp is a RAM-backed filesystem on Cardputer. Keep refresh work on disk.
-class RefreshFile {
-    char path_[sizeof("/var/tmp/okou-zero-refresh-XXXXXX")] = "/var/tmp/okou-zero-refresh-XXXXXX";
-    int fd_ = -1;
-
-  public:
-    RefreshFile() {
-        fd_ = ::mkostemp(path_, O_CLOEXEC);
-        if (fd_ < 0)
-            throw std::runtime_error("Cannot create temporary chat refresh file");
-    }
-    RefreshFile(const RefreshFile &) = delete;
-    RefreshFile &operator=(const RefreshFile &) = delete;
-    ~RefreshFile() {
-        if (fd_ >= 0)
-            ::close(fd_);
-        if (path_[0])
-            ::unlink(path_);
-    }
-    const char *path() const {
-        return path_;
-    }
-    std::FILE *stream() {
-        auto *file = ::fdopen(fd_, "w+b");
-        if (!file)
-            throw std::runtime_error("Cannot open temporary chat snapshot");
-        fd_ = -1;
-        if (::unlink(path_) == 0)
-            path_[0] = '\0';
-        return file;
-    }
-};
-
 class ThreadIndex {
-    RefreshFile file_;
+    DiskFile file_;
     std::unique_ptr<sqlite3, decltype(&sqlite3_close)> db_{nullptr, sqlite3_close};
     using Statement = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
 
@@ -304,7 +285,7 @@ class ThreadIndex {
 };
 
 class SnapshotSpool {
-    RefreshFile temp_;
+    DiskFile temp_;
     std::unique_ptr<std::FILE, decltype(&std::fclose)> file_{temp_.stream(), std::fclose};
 
   public:
@@ -556,15 +537,22 @@ std::vector<Message> present(const History &h) {
         if (type.rfind("input.", 0) == 0) {
             m.role = "user";
             auto doc = p.value("userMessage", Json::object());
+            bool unsupported = false;
             if (doc.is_object() && doc.contains("parts") && doc["parts"].is_array())
                 for (const auto &part : doc["parts"]) {
                     if (str(part, "type") == "text")
                         m.text += str(part, "text");
-                    else if (str(part, "type") == "voice")
+                    else if (str(part, "type") == "voice") {
                         m.text += m.text.empty() ? "[Voice message]" : "\n[Voice message]";
-                    else
-                        m.text += "\n[Attachment or action: review in Okou Web]";
+                        for (const auto &clip : part.at("clips"))
+                            if (m.voice_clips.size() < 32)
+                                m.voice_clips.push_back(clip.get<std::string>());
+                    } else
+                        unsupported = true;
                 }
+            if (unsupported)
+                m.text += m.text.empty() ? "[Attachment or action: review in Okou Web]"
+                                         : "\n[Attachment or action: review in Okou Web]";
         } else if (type == "output.message") {
             m.role = "assistant";
             m.text = str(p, "content");
@@ -886,6 +874,15 @@ SendResult Client::send(const Thread &thread, const std::string &text,
     if (text.find_first_not_of(" \t\r\n") == std::string::npos || text.size() > 128 * 1024)
         throw std::runtime_error("Enter a bounded nonempty message");
     return send_message(thread, text, {{"type", "text"}, {"text", text}}, true, requested_id);
+}
+
+std::string Client::voice_playback_url(const std::string &file_id) {
+    if (!is_uuid(file_id))
+        throw std::runtime_error("Invalid voice clip identity");
+    auto url = str(api("GET", "/api/voice/clips/" + file_id + "/playback"), "url");
+    if (url.empty())
+        invalid();
+    return url;
 }
 
 std::string Client::upload_voice(const std::vector<std::int16_t> &pcm) {

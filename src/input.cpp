@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <linux/input.h>
 #include <stdexcept>
+#include <string_view>
 #include <unistd.h>
 #if OKOU_ZERO_DESKTOP
 #include <SDL2/SDL.h>
@@ -23,6 +24,12 @@ Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl) {
     out.shift = shift;
     out.ctrl = ctrl;
     switch (code) {
+    case KEY_SPACE:
+        if (!ctrl) {
+            out.key = Key::space;
+            out.text = " ";
+        }
+        return out;
     case KEY_ENTER:
         out.key = Key::enter;
         return out;
@@ -68,8 +75,7 @@ Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl) {
         {KEY_0, '0', ')'},         {KEY_MINUS, '-', '_'},       {KEY_EQUAL, '=', '+'},
         {KEY_LEFTBRACE, '[', '{'}, {KEY_RIGHTBRACE, ']', '}'},  {KEY_BACKSLASH, '\\', '|'},
         {KEY_SEMICOLON, ';', ':'}, {KEY_APOSTROPHE, '\'', '"'}, {KEY_GRAVE, '`', '~'},
-        {KEY_COMMA, ',', '<'},     {KEY_DOT, '.', '>'},         {KEY_SLASH, '/', '?'},
-        {KEY_SPACE, ' ', ' '}};
+        {KEY_COMMA, ',', '<'},     {KEY_DOT, '.', '>'},         {KEY_SLASH, '/', '?'}};
     static const Pair letters[] = {
         {KEY_A, 'a', 'A'}, {KEY_B, 'b', 'B'}, {KEY_C, 'c', 'C'}, {KEY_D, 'd', 'D'},
         {KEY_E, 'e', 'E'}, {KEY_F, 'f', 'F'}, {KEY_G, 'g', 'G'}, {KEY_H, 'h', 'H'},
@@ -142,7 +148,8 @@ std::vector<Input> Keyboard::poll() {
                 continue;
             }
             if (event.type == SDL_TEXTINPUT) {
-                result.push_back({Key::text, event.text.text, false, false});
+                if (std::string_view(event.text.text) != " ")
+                    result.push_back({Key::text, event.text.text, false, false});
                 continue;
             }
             if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
@@ -166,6 +173,12 @@ std::vector<Input> Keyboard::poll() {
             case SDLK_KP_ENTER:
                 if (!event.key.repeat)
                     out.key = Key::enter_down;
+                break;
+            case SDLK_SPACE:
+                if (!event.key.repeat && !out.ctrl) {
+                    out.key = Key::space;
+                    out.text = " ";
+                }
                 break;
             case SDLK_ESCAPE:
                 out.key = Key::escape;
@@ -266,7 +279,7 @@ std::vector<Input> Keyboard::poll() {
                     {event.value ? Key::enter_down : Key::enter_up, {}, shift_, ctrl_});
             continue;
         }
-        if (!event.value)
+        if (!event.value || (event.code == KEY_SPACE && event.value == 2))
             continue;
         auto input = map_key(event.code, shift_, caps_, ctrl_);
         if (input.key != Key::none)

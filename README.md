@@ -34,7 +34,7 @@ Ubuntu 24.04 (amd64 or arm64):
 
 ```sh
 sudo apt-get install cmake ninja-build g++ libcurl4-openssl-dev libssl-dev \
-  zlib1g-dev libsqlite3-dev nlohmann-json3-dev libasound2-dev libsdl2-dev libfreetype-dev libharfbuzz-dev fonts-noto-cjk fonts-noto-color-emoji \
+  zlib1g-dev libsqlite3-dev nlohmann-json3-dev libasound2-dev libpulse-dev libsdl2-dev libfreetype-dev libharfbuzz-dev fonts-noto-cjk fonts-noto-color-emoji \
   python3 openssl sudo
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
 cmake --build build --parallel 2
@@ -115,6 +115,7 @@ replaced. Public CI tests mock updater network calls and never install a real up
 | --- | --- |
 | Up / down, Enter | Navigate settings or scroll conversation history |
 | Hold Enter in chat | Record while held, then release to send a voice message |
+| Space in chat | Play the first visible Zero voice message, pause, or resume |
 | Ctrl+R | Retry a retained recording or failed voice message |
 | Esc while recording/recovering | Discard recording and retained voice work |
 | Esc | Back/menu |
