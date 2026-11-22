@@ -1,3 +1,4 @@
+#include "disk_file.hpp"
 #include "emoji.hpp"
 #include "okou/diagnostics.hpp"
 #include "okou/ui.hpp"
@@ -37,6 +38,9 @@ class Engine {
     std::string voice_file_id_;
     std::string voice_thread_;
     std::atomic_bool voice_cancelled_{false};
+    std::thread playback_;
+    std::atomic_bool playback_active_{false}, playback_paused_{false}, playback_stop_{false};
+    std::atomic_bool playback_failed_{false};
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::function<void()>> tasks_;
@@ -142,6 +146,9 @@ class Engine {
         auto s = std::atomic_load(&session_);
         s->cancelled = true;
         cv_.notify_all();
+        stop_playback();
+        if (playback_.joinable())
+            playback_.join();
         if (worker_.joinable())
             worker_.join();
         stop_realtime();
@@ -343,6 +350,66 @@ class Engine {
                     }
                 }
             });
+        });
+    }
+    void stop_playback() {
+        playback_stop_ = true;
+        playback_failed_ = false;
+    }
+    std::string playback_status() const {
+        if (playback_stop_)
+            return {};
+        if (playback_active_)
+            return playback_paused_ ? "Paused   Space resume" : "Playing   Space pause";
+        return playback_failed_ ? "Could not play recording" : "";
+    }
+    void toggle_playback(const std::vector<std::string> &clips) {
+        if (playback_active_) {
+            if (!playback_stop_)
+                playback_paused_ = !playback_paused_.load();
+            return;
+        }
+        if (clips.empty())
+            return;
+        if (playback_.joinable())
+            playback_.join();
+        playback_stop_ = playback_paused_ = playback_failed_ = false;
+        playback_active_ = true;
+        auto s = std::atomic_load(&session_);
+        playback_ = std::thread([this, s, clips] {
+            try {
+                Http storage(&playback_stop_);
+                for (const auto &id : clips) {
+                    if (playback_stop_)
+                        break;
+                    std::string url;
+                    {
+                        std::lock_guard<std::mutex> guard(s->io);
+                        if (playback_stop_)
+                            break;
+                        ensure(*s);
+                        url = s->client->voice_playback_url(id);
+                    }
+                    DiskFile spool;
+                    auto close_file = [](std::FILE *file) { std::fclose(file); };
+                    std::unique_ptr<std::FILE, decltype(close_file)> audio(spool.stream(),
+                                                                           close_file);
+                    auto response = storage.request("GET", url, {}, {}, {}, {}, audio.get(),
+                                                    25U * 1024U * 1024U);
+                    if (response.status != 200)
+                        throw HttpError(response.status, "Recording download failed");
+                    if (std::fflush(audio.get()) != 0 || std::fseek(audio.get(), 0, SEEK_SET) != 0)
+                        throw std::runtime_error("Could not read recording");
+                    if (!playback_stop_)
+                        play_wav(audio.get(), playback_paused_, playback_stop_);
+                }
+            } catch (const std::exception &ex) {
+                if (!playback_stop_) {
+                    diagnostics::log_error(diagnostics::Stage::voice, ex);
+                    playback_failed_ = true;
+                }
+            }
+            playback_active_ = false;
         });
     }
     void voice(bool finish, const Thread &thread) {
@@ -557,6 +624,17 @@ int main(int argc, char **argv) {
             check(ui.uncertain && ui.messages.empty());
             ui.reconcile_send(ui.current.id, false);
             check(!ui.uncertain);
+            ui.messages = {{"old", "user", "[Voice message]", false, {"old-clip"}},
+                           {"middle", "assistant", "Reply\nReply\nReply\nReply", false},
+                           {"current", "user", "[Voice message]", false, {"current-clip"}},
+                           {"next", "user", "[Voice message]", false, {"next-clip"}}};
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"current-clip"});
+            check(ui.handle({Key::space, " "}) == Action::playback);
+            ui.handle({Key::up, {}});
+            ui.handle({Key::up, {}});
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
             ui.handle({Key::escape, {}, false, false});
             check(ui.page == Page::settings);
             ui.handle({Key::escape, {}, false, false});
@@ -602,6 +680,13 @@ int main(int argc, char **argv) {
             }
             if (engine && engine->drain(ui))
                 dirty = true;
+            if (engine) {
+                auto playback = engine->playback_status();
+                if (ui.playback_status != playback) {
+                    ui.playback_status = std::move(playback);
+                    dirty = true;
+                }
+            }
             if (updater.poll()) {
                 ui.update_message = update_hint(updater.view());
                 dirty = true;
@@ -639,6 +724,7 @@ int main(int argc, char **argv) {
                             enter_pressed = std::chrono::steady_clock::now();
                             ui.recording_started = {};
                             ui.recording = ui.voice_working = ui.busy = true;
+                            engine->stop_playback();
                             engine->voice(false, ui.current);
                             dirty = true;
                         }
@@ -682,7 +768,10 @@ int main(int argc, char **argv) {
                     dirty = true;
                     continue;
                 }
+                const auto prev_page = ui.page;
                 auto action = ui.handle(input);
+                if (engine && prev_page == Page::chat && ui.page != Page::chat)
+                    engine->stop_playback();
                 dirty = true;
                 if (action == Action::quit) {
                     running = false;
@@ -690,7 +779,7 @@ int main(int argc, char **argv) {
                 }
                 if (!engine)
                     continue;
-                if (action != Action::none)
+                if (action != Action::none && action != Action::playback)
                     ui.busy = true;
                 switch (action) {
                 case Action::login:
@@ -701,6 +790,10 @@ int main(int argc, char **argv) {
                     break;
                 case Action::refresh:
                     engine->open_fixed_chat();
+                    break;
+                case Action::playback:
+                    ui.render();
+                    engine->toggle_playback(ui.visible_voice_clips);
                     break;
                 case Action::voice:
                     engine->voice(true, ui.current);

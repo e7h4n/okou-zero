@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <alsa/asoundlib.h>
 #include <array>
+#include <cstring>
 #include <limits>
+#include <pulse/simple.h>
 #include <thread>
 
 namespace okou {
@@ -50,6 +52,72 @@ std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm) {
     for (auto sample : pcm)
         le16(out, static_cast<std::uint16_t>(sample));
     return out;
+}
+
+void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop) {
+    std::array<unsigned char, 44> header{};
+    auto matches = [&](std::size_t offset, const char *text) {
+        return std::memcmp(header.data() + offset, text, 4) == 0;
+    };
+    auto number = [&](std::size_t offset, unsigned count) {
+        std::uint32_t value = 0;
+        for (unsigned i = 0; i < count; ++i)
+            value |= static_cast<std::uint32_t>(header[offset + i]) << (8 * i);
+        return value;
+    };
+    if (std::fread(header.data(), 1, header.size(), file) != header.size() || !matches(0, "RIFF") ||
+        !matches(8, "WAVE") || !matches(12, "fmt ") || number(16, 4) != 16 || number(20, 2) != 1 ||
+        number(22, 2) != 1 || number(24, 4) != 16000 || number(34, 2) != 16 || !matches(36, "data"))
+        throw std::runtime_error("Unsupported recording format");
+    const auto bytes = number(40, 4);
+    if (!bytes || bytes % 2 || bytes > 25U * 1024U * 1024U - header.size() ||
+        std::fseek(file, 0, SEEK_END) != 0 ||
+        std::ftell(file) != static_cast<long>(header.size() + bytes))
+        throw std::runtime_error("Invalid recording length");
+
+    constexpr unsigned rate = 16000;
+    const pa_sample_spec format{PA_SAMPLE_S16LE, rate, 1};
+    constexpr auto automatic = std::numeric_limits<std::uint32_t>::max();
+    const pa_buffer_attr buffer_config{rate * 2 / 10, rate * 2 / 20, automatic, automatic,
+                                       automatic};
+    std::unique_ptr<pa_simple, decltype(&pa_simple_free)> audio(
+        pa_simple_new(nullptr, "Okou Zero", PA_STREAM_PLAYBACK, nullptr, "Voice message", &format,
+                      nullptr, &buffer_config, nullptr),
+        pa_simple_free);
+    if (!audio)
+        throw std::runtime_error("Cannot open system audio output");
+
+    std::array<unsigned char, 640> buffer{};
+    const auto total = static_cast<std::size_t>(bytes / 2);
+    std::size_t written = 0;
+    bool suspended = false;
+    while (!stop) {
+        if (paused) {
+            if (!suspended) {
+                const auto latency = pa_simple_get_latency(audio.get(), nullptr);
+                if (latency != static_cast<pa_usec_t>(-1))
+                    written -= std::min(written, pa_usec_to_bytes(latency, &format) / 2);
+                if (pa_simple_flush(audio.get(), nullptr) < 0)
+                    throw std::runtime_error("Cannot pause audio playback");
+                suspended = true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            continue;
+        }
+        suspended = false;
+        if (written == total) {
+            if (pa_simple_drain(audio.get(), nullptr) < 0)
+                throw std::runtime_error("Audio playback failed");
+            break;
+        }
+        const auto frames = std::min(total - written, buffer.size() / 2);
+        if (std::fseek(file, static_cast<long>(header.size() + 2 * written), SEEK_SET) != 0 ||
+            std::fread(buffer.data(), 2, frames, file) != frames)
+            throw std::runtime_error("Could not read recording");
+        if (pa_simple_write(audio.get(), buffer.data(), frames * 2, nullptr) < 0)
+            throw std::runtime_error("Audio playback failed");
+        written += frames;
+    }
 }
 
 struct AudioCapture::Impl {

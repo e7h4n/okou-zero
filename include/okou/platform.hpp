@@ -10,6 +10,7 @@ namespace okou {
 enum class Key {
     none,
     text,
+    space,
     enter,
     enter_down,
     enter_up,

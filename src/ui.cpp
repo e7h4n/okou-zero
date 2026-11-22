@@ -180,7 +180,7 @@ Action UI::handle(const Input &input) {
     if (input.key == Key::reload && !busy && !recording && !voice_pending)
         return Action::refresh;
     if (page == Page::setup) {
-        if (input.key == Key::text && draft.size() < 512)
+        if ((input.key == Key::text || input.key == Key::space) && draft.size() < 512)
             draft += input.text;
         if (input.key == Key::backspace)
             erase_utf8(draft);
@@ -198,6 +198,8 @@ Action UI::handle(const Input &input) {
         return Action::none;
     }
     if (page == Page::chat) {
+        if (input.key == Key::space && !recording && !voice_pending && !submitting)
+            return Action::playback;
         if (input.key == Key::escape && !busy && !recording && !voice_pending && !submitting) {
             page = Page::settings;
             selected = 0;
@@ -305,6 +307,7 @@ void UI::render_recording() {
     }
 }
 void UI::render() {
+    visible_voice_clips.clear();
     if (page == Page::chat && recording) {
         render_recording();
         return;
@@ -384,12 +387,15 @@ void UI::render() {
         lv_obj_set_scroll_dir(history, LV_DIR_VER);
         lv_obj_set_scrollbar_mode(history, LV_SCROLLBAR_MODE_OFF);
         int y = 0;
+        std::vector<std::pair<std::size_t, lv_obj_t *>> voice_labels;
         std::size_t start = messages.size() > 30 ? messages.size() - 30 : 0;
         for (std::size_t i = start; i < messages.size(); ++i) {
             const auto &message = messages[i];
             label(history, message.role == "user" ? "You" : "Okou", 3, y, 299, muted, 17);
             y += 18;
             auto *text = label(history, message.text, 3, y, 299, ink);
+            if (!message.voice_clips.empty())
+                voice_labels.emplace_back(i, text);
             lv_obj_update_layout(text);
             y += lv_obj_get_height(text) + 8;
         }
@@ -401,16 +407,29 @@ void UI::render() {
         }
         lv_obj_update_layout(history);
         lv_obj_scroll_to_y(history, std::max(y - 122 - history_scroll_, 0), LV_ANIM_OFF);
+        lv_area_t viewport{};
+        lv_obj_get_coords(history, &viewport);
+        for (const auto &[index, text] : voice_labels) {
+            lv_area_t bounds{};
+            lv_obj_get_coords(text, &bounds);
+            if (bounds.y2 >= viewport.y1 && bounds.y1 <= viewport.y2) {
+                visible_voice_clips = messages[index].voice_clips;
+                break;
+            }
+        }
         const bool voice_feedback = status == "No speech recognized" ||
                                     status == "Voice send failed" || status == "Message accepted" ||
                                     status == "Recording stopped" ||
                                     status == "Recording discarded";
-        help = current.id.empty()       ? "Ctrl+L retry   Ctrl+W settings"
-               : uncertain              ? "Send uncertain: refresh history; do not resend"
-               : voice_pending && !busy ? "Voice retained: Ctrl+R retry   Esc discard"
-               : submitting             ? "Sending... please wait"
-               : recording || busy || voice_feedback ? status
-                                                     : "Hold Enter to record";
+        help = current.id.empty()             ? "Ctrl+L retry   Ctrl+W settings"
+               : uncertain                    ? "Send uncertain: refresh history; do not resend"
+               : voice_pending && !busy       ? "Voice retained: Ctrl+R retry   Esc discard"
+               : submitting                   ? "Sending... please wait"
+               : recording || busy            ? status
+               : !playback_status.empty()     ? playback_status
+               : !visible_voice_clips.empty() ? "Space play   Hold Enter to record"
+               : voice_feedback               ? status
+                                              : "Hold Enter to record";
     }
     if (!update_message.empty() && page != Page::chat)
         help = update_message;

@@ -13,7 +13,6 @@
 
 namespace okou {
 namespace {
-constexpr std::size_t max_body = 16 * 1024 * 1024;
 constexpr std::size_t max_headers = 64 * 1024;
 struct CurlGlobal {
     CurlGlobal() {
@@ -27,6 +26,7 @@ struct CurlGlobal {
 struct Transfer {
     HttpResponse response;
     std::FILE *output = nullptr;
+    std::size_t body_limit = 0;
     std::size_t body_bytes = 0;
     std::size_t header_bytes = 0;
     bool overflow = false;
@@ -37,7 +37,7 @@ std::size_t receive(char *p, std::size_t size, std::size_t n, void *arg) noexcep
     if (size && n > std::numeric_limits<std::size_t>::max() / size)
         return 0;
     auto bytes = size * n;
-    if (bytes > max_body - t.body_bytes) {
+    if (bytes > t.body_limit - t.body_bytes) {
         t.overflow = true;
         return 0;
     }
@@ -134,7 +134,8 @@ std::string Http::encode(const std::string &value) {
 HttpResponse Http::request(const std::string &method, const std::string &url, std::string_view body,
                            const std::string &bearer,
                            const std::map<std::string, std::string> &headers,
-                           const std::vector<UploadPart> &parts, std::FILE *output) {
+                           const std::vector<UploadPart> &parts, std::FILE *output,
+                           std::size_t body_limit) {
     static CurlGlobal global;
     if (cancelled_ && cancelled_->load())
         throw HttpError(0, "Request cancelled");
@@ -170,6 +171,7 @@ HttpResponse Http::request(const std::string &method, const std::string &url, st
         throw HttpError(0, "HTTP initialization failed");
     Transfer transfer;
     transfer.output = output;
+    transfer.body_limit = body_limit;
     curl_slist *list = nullptr;
     struct ListGuard {
         curl_slist *&list;

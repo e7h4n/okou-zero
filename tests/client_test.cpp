@@ -688,6 +688,26 @@ std::map<std::string, std::string> multipart(const Request &r) {
     }
     return parts;
 }
+void voice_history_test() {
+    Fixture f;
+    const std::string clip = "aaaaaaaa-1111-4000-8000-111111111111";
+    auto parts = Json::array({{{"type", "voice"}, {"clips", Json::array({{{"fileId", clip}}})}},
+                              {{"type", "source"}, {"hidden", "source metadata"}},
+                              {{"type", "additional_info"}, {"text", "hidden context"}},
+                              {{"type", "model"}, {"selectedModel", "hidden model"}}});
+    auto rows = Json::array({row(1, "input.prompt", {{"userMessage", {{"parts", parts}}}})});
+    const auto url = f.server.origin() + "/storage/voice?signature=private";
+    f.server.start({missing_snapshot(), get(rows_path(0), tail(rows, 1, id(1))),
+                    get(rows_path(1, id(1)), tail(Json::array(), 1, id(1))),
+                    get("/api/voice/clips/" + clip + "/playback", {{"url", url}})});
+    auto client = f.client();
+    auto messages = client.history(thread_id);
+    check(messages.size() == 1 && messages.front().text == "[Voice message]" &&
+              messages.front().voice_clips == std::vector<std::string>{clip},
+          "Voice history retains only the label and playable clip IDs");
+    check(client.voice_playback_url(clip) == url, "Preserves the signed playback URL");
+    f.server.finish();
+}
 void voice_message_test() {
     Fixture f;
     const std::string file_id = "aaaaaaaa-1111-4000-8000-111111111111";
@@ -842,6 +862,7 @@ int main() {
         uncertain_absence_test();
         voice_test();
         voice_message_test();
+        voice_history_test();
         read_and_token_test();
         security_test();
         std::cout << "client protocol tests passed\n";
