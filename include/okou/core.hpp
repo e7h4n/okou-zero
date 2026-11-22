@@ -25,7 +25,7 @@ struct Config {
                          "okou:chat:send okou:project:read okou:voice:transcribe";
     std::string keyboard = "/dev/input/by-path/platform-3f804000.i2c-event";
     std::string framebuffer = "/dev/fb0";
-    std::string capture_device = "plughw:CARD=ES8389Audio,DEV=0";
+    std::string capture_device = "pulse";
     std::string data_dir;
 };
 struct HttpResponse {

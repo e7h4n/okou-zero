@@ -148,6 +148,9 @@ set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "ca-certificates, fonts-noto-cjk, python3, openssl, sudo")
+# The signed updater uses dpkg directly. Refuse an upgrade before unpacking if
+# the PulseAudio PCM plugin has not yet been installed.
+set(CPACK_DEBIAN_PACKAGE_PREDEPENDS "libasound2-plugins")
 set(CPACK_DEBIAN_PACKAGE_SECTION net)
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/e7h4n/okou-zero")
 set(CPACK_PACKAGING_INSTALL_PREFIX /usr)
