@@ -142,8 +142,11 @@ Json visible_row(const Json &row) {
                     auto text = clipped(str(part, "text"), 32768 - bytes);
                     bytes += text.size();
                     parts.push_back({{"type", "text"}, {"text", text}});
-                } else
+                } else if (str(part, "type") == "voice") {
+                    parts.push_back({{"type", "voice"}});
+                } else {
                     parts.push_back({{"type", "unsupported"}});
+                }
             }
         payload["userMessage"] = {{"parts", parts}};
     }
@@ -557,6 +560,8 @@ std::vector<Message> present(const History &h) {
                 for (const auto &part : doc["parts"]) {
                     if (str(part, "type") == "text")
                         m.text += str(part, "text");
+                    else if (str(part, "type") == "voice")
+                        m.text += m.text.empty() ? "[Voice message]" : "\n[Voice message]";
                     else
                         m.text += "\n[Attachment or action: review in Okou Web]";
                 }
@@ -878,14 +883,50 @@ bool Client::has_pending_send(const std::string &thread_id) const {
 }
 SendResult Client::send(const Thread &thread, const std::string &text,
                         const std::string &requested_id) {
+    if (text.find_first_not_of(" \t\r\n") == std::string::npos || text.size() > 128 * 1024)
+        throw std::runtime_error("Enter a bounded nonempty message");
+    return send_message(thread, text, {{"type", "text"}, {"text", text}}, true, requested_id);
+}
+
+std::string Client::upload_voice(const std::vector<std::int16_t> &pcm) {
+    constexpr auto limit = 25U * 1024U * 1024U;
+    constexpr auto mime = "audio/wav";
+    if (pcm.empty() || pcm.size() > (limit - 44) / sizeof(std::int16_t))
+        throw std::runtime_error("Recording must contain audio and fit within 25 MiB");
+    auto audio = wav(pcm);
+    auto prepared =
+        api("POST", "/api/uploads/prepare/private",
+            {{"filename", "recording.wav"}, {"contentType", mime}, {"size", audio.size()}});
+    auto id = str(prepared, "id");
+    auto url = str(prepared, "uploadUrl");
+    if (!is_uuid(id) || url.empty())
+        invalid();
+    auto headers =
+        prepared.value("uploadHeaders", Json::object()).get<std::map<std::string, std::string>>();
+    headers["Content-Type"] = mime;
+    std::string_view bytes(reinterpret_cast<const char *>(audio.data()), audio.size());
+    success(http_.request("PUT", url, bytes, "", headers));
+    if (str(api("POST", "/api/uploads/complete", {{"id", id}}), "id") != id)
+        invalid();
+    return id;
+}
+
+SendResult Client::send_voice(const Thread &thread, const std::string &file_id) {
+    if (!is_uuid(file_id))
+        throw std::runtime_error("Invalid voice clip identity");
+    return send_message(thread, "(see message parts)",
+                        {{"type", "voice"}, {"clips", Json::array({{{"fileId", file_id}}})}}, false,
+                        {});
+}
+
+SendResult Client::send_message(const Thread &thread, const std::string &prompt, const Json &part,
+                                bool has_text, const std::string &requested_id) {
     auto base = tid(thread.id);
     auto path = pending_path(config_, tokens_, thread.id);
     auto pending = load_pending(path);
     // Reconcile through history(), never submit a second operation while uncertain.
     if (!pending.is_null())
         return {str(pending, "clientEventId"), true};
-    if (text.find_first_not_of(" \t\r\n") == std::string::npos || text.size() > 128 * 1024)
-        throw std::runtime_error("Enter a bounded nonempty message");
     auto id = requested_id.empty() ? uuid() : requested_id;
     if (!is_uuid(id))
         throw std::runtime_error("Invalid message identity");
@@ -894,12 +935,11 @@ SendResult Client::send(const Thread &thread, const std::string &text,
         invalid();
     auto sort = uuid();
     Json body = {{"threadId", thread.id},
-                 {"prompt", text},
+                 {"prompt", prompt},
                  {"clientEventId", id},
                  {"chatThreadSortEventId", sort},
-                 {"userMessage",
-                  {{"version", 1}, {"parts", Json::array({{{"type", "text"}, {"text", text}}})}}},
-                 {"hasTextContent", true},
+                 {"userMessage", {{"version", 1}, {"parts", Json::array({part})}}},
+                 {"hasTextContent", has_text},
                  {"computerUseHostId", metadata.value("computerUseHostId", Json(nullptr))},
                  {"cloudBrowserEnabled", flag(metadata, "cloudBrowserEnabled")}};
     save_pending(path,

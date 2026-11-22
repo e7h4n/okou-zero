@@ -20,7 +20,8 @@ Implemented surfaces:
 - One fixed conversation per account and workspace, opened at launch.
 - Chat-only Ably subscription with reconnect, token renewal and gap reconciliation.
 - Voice-only chat with a full-screen recording indicator. Hold Enter to record,
-  then release to transcribe and send. Uncertain deliveries are never resent automatically.
+  then release to upload the recording privately and send a voice message.
+  Uncertain deliveries are never resent automatically.
 - SDL2 desktop simulator, Linux framebuffer/evdev device backend and CPack `.deb`.
 - GitHub Actions desktop tests/screenshots and native ARM64 package/install tests.
 
@@ -113,7 +114,7 @@ replaced. Public CI tests mock updater network calls and never install a real up
 | Key | Action |
 | --- | --- |
 | Up / down, Enter | Navigate settings or scroll conversation history |
-| Hold Enter in chat | Record while held, then release to transcribe and send directly |
+| Hold Enter in chat | Record while held, then release to send a voice message |
 | Ctrl+R | Retry a retained recording or failed voice message |
 | Esc while recording/recovering | Discard recording and retained voice work |
 | Esc | Back/menu |

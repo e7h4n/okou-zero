@@ -131,8 +131,8 @@ std::string Http::encode(const std::string &value) {
     }
     return out;
 }
-HttpResponse Http::request(const std::string &method, const std::string &url,
-                           const std::string &body, const std::string &bearer,
+HttpResponse Http::request(const std::string &method, const std::string &url, std::string_view body,
+                           const std::string &bearer,
                            const std::map<std::string, std::string> &headers,
                            const std::vector<UploadPart> &parts, std::FILE *output) {
     static CurlGlobal global;
@@ -260,7 +260,7 @@ HttpResponse Http::request(const std::string &method, const std::string &url,
         }
         curl_easy_setopt(curl.get(), CURLOPT_MIMEPOST, mime.get());
     } else if (writing || !body.empty()) {
-        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.data());
+        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.empty() ? "" : body.data());
         curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE_LARGE,
                          static_cast<curl_off_t>(body.size()));
     }
