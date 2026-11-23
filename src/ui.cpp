@@ -30,6 +30,8 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
     lv_obj_set_size(root_, 320, 170);
     const char *paths[] = {"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"};
+    const char *bold_paths[] = {"/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+                                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"};
     for (const auto *path : paths)
         if (std::filesystem::exists(path)) {
             font_ = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 13,
@@ -37,6 +39,27 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
             if (font_) {
                 detail_font_ = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP,
                                                        11, LV_FREETYPE_FONT_STYLE_NORMAL);
+                for (const auto *bold_path : bold_paths) {
+                    if (!std::filesystem::exists(bold_path))
+                        continue;
+                    markdown_fonts_.bold =
+                        lv_freetype_font_create(bold_path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 13,
+                                                LV_FREETYPE_FONT_STYLE_NORMAL);
+                    markdown_fonts_.heading =
+                        lv_freetype_font_create(bold_path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 16,
+                                                LV_FREETYPE_FONT_STYLE_NORMAL);
+                    break;
+                }
+                markdown_fonts_.italic = lv_freetype_font_create(
+                    path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 13, LV_FREETYPE_FONT_STYLE_ITALIC);
+                const char *mono = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
+                if (std::filesystem::exists(mono)) {
+                    markdown_fonts_.code =
+                        lv_freetype_font_create(mono, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 12,
+                                                LV_FREETYPE_FONT_STYLE_NORMAL);
+                    if (markdown_fonts_.code)
+                        markdown_fonts_.code->fallback = font_;
+                }
                 break;
             }
         }
@@ -60,6 +83,10 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
 }
 UI::~UI() {
     lv_obj_clean(root_);
+    for (auto *face : {markdown_fonts_.code, markdown_fonts_.heading, markdown_fonts_.italic,
+                       markdown_fonts_.bold})
+        if (face)
+            lv_freetype_font_delete(face);
     if (detail_font_)
         lv_freetype_font_delete(detail_font_);
     if (font_)
@@ -399,7 +426,7 @@ void UI::render() {
             label(history, message.role == "user" ? "You" : "Okou", 3, y, 299,
                   focused ? green : muted, 17);
             y += 18;
-            auto *text = label(history, message.text, 3, y, 299, ink);
+            auto *text = markdown_body(history, message.text, 3, y, 299, markdown_fonts_);
             if (!message.voice_clips.empty())
                 voice_labels.emplace_back(i, text);
             lv_obj_update_layout(text);
@@ -462,7 +489,8 @@ void UI::demo(const std::string &screen) {
         demo_thread.title = "Cardputer Zero";
         select_thread(demo_thread);
         messages = {{"event_1", "user", "帮我整理今天要做的事", false},
-                    {"event_2", "assistant", "当然。我们先从最重要的一件事开始。", true}};
+                    {"event_2", "assistant",
+                     "## 今日安排\n\n1. **确认时间**，再回复团队。\n2. 查看 `README.md`。", true}};
         if (screen == "recording") {
             recording = true;
             recording_started = std::chrono::steady_clock::now();

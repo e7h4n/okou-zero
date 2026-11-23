@@ -5,6 +5,11 @@ No BSL application implementation is copied from the Okou reference repository.
 The official avatar is retained from the repository's approved branding baseline;
 its separate brand-asset terms below are not covered by the MIT code license.
 
+## MD4C 0.5.2
+
+The Markdown parser and entity table are MIT licensed, copyright © 2016–2024 Martin Mitáš.
+The package includes the upstream license in `MD4C-LICENSE.md`.
+
 ## LVGL 9.5.0
 
 Source: https://github.com/lvgl/lvgl/tree/85aa60d18b3d5e5588d7b247abf90198f07c8a63
