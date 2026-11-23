@@ -1,4 +1,5 @@
 #pragma once
+#include "okou/chat_navigation.hpp"
 #include "okou/core.hpp"
 #include "okou/platform.hpp"
 #include <chrono>
@@ -53,7 +54,7 @@ class UI {
     lv_font_t *font_ = nullptr;
     lv_font_t *detail_font_ = nullptr;
     std::unique_ptr<EmojiRenderer> emoji_;
-    int history_scroll_ = 0;
+    ChatNavigation navigation_;
     std::vector<Message> acknowledged_messages_;
     lv_obj_t *recording_overlay_ = nullptr;
     lv_obj_t *recording_clock_ = nullptr;

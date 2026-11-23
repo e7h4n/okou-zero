@@ -126,7 +126,7 @@ void UI::reset_account() {
     verification_uri.clear();
     selected = 0;
     acknowledged_messages_.clear();
-    history_scroll_ = 0;
+    navigation_ = {};
     busy = recording = uncertain = submitting = voice_pending = voice_working = false;
 }
 void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
@@ -139,7 +139,7 @@ void UI::complete_send(const std::string &thread_id, const std::string &text, bo
             if (acknowledged_messages_.size() > 30)
                 acknowledged_messages_.erase(acknowledged_messages_.begin());
             messages.push_back(std::move(message));
-            history_scroll_ = 0;
+            navigation_ = {};
         }
     }
     submitting = false;
@@ -163,7 +163,7 @@ void UI::select_thread(const Thread &thread) {
     current = thread;
     messages.clear();
     acknowledged_messages_.clear();
-    history_scroll_ = 0;
+    navigation_ = {};
     uncertain = false;
     page = Page::chat;
 }
@@ -208,9 +208,11 @@ Action UI::handle(const Input &input) {
             voice_working = true;
             return Action::voice;
         } else if (input.key == Key::up || input.key == Key::page_up)
-            history_scroll_ = std::min(history_scroll_ + 48, 100000);
+            navigation_.scroll(48);
         else if (input.key == Key::down || input.key == Key::page_down)
-            history_scroll_ = std::max(history_scroll_ - 48, 0);
+            navigation_.scroll(-48);
+        else if (!recording && (input.key == Key::left || input.key == Key::right))
+            navigation_.jump(input.key == Key::right);
         return Action::none;
     }
     if (input.key == Key::escape) {
@@ -387,17 +389,23 @@ void UI::render() {
         lv_obj_set_scroll_dir(history, LV_DIR_VER);
         lv_obj_set_scrollbar_mode(history, LV_SCROLLBAR_MODE_OFF);
         int y = 0;
+        std::vector<MessageBounds> rows;
         std::vector<std::pair<std::size_t, lv_obj_t *>> voice_labels;
         std::size_t start = messages.size() > 30 ? messages.size() - 30 : 0;
         for (std::size_t i = start; i < messages.size(); ++i) {
             const auto &message = messages[i];
-            label(history, message.role == "user" ? "You" : "Okou", 3, y, 299, muted, 17);
+            const int top = y;
+            const bool focused = !message.id.empty() && navigation_.selected() == message.id;
+            label(history, message.role == "user" ? "You" : "Okou", 3, y, 299,
+                  focused ? green : muted, 17);
             y += 18;
             auto *text = label(history, message.text, 3, y, 299, ink);
             if (!message.voice_clips.empty())
                 voice_labels.emplace_back(i, text);
             lv_obj_update_layout(text);
-            y += lv_obj_get_height(text) + 8;
+            y += lv_obj_get_height(text);
+            rows.push_back({message.id, top, y});
+            y += 8;
         }
         if (messages.empty()) {
             const auto empty_chat = current.id.empty() ? status
@@ -406,7 +414,8 @@ void UI::render() {
             label(history, empty_chat, 3, 8, 299, muted);
         }
         lv_obj_update_layout(history);
-        lv_obj_scroll_to_y(history, std::max(y - 122 - history_scroll_, 0), LV_ANIM_OFF);
+        navigation_.layout(std::move(rows), lv_obj_get_height(history));
+        lv_obj_scroll_to_y(history, navigation_.offset(), LV_ANIM_OFF);
         lv_area_t viewport{};
         lv_obj_get_coords(history, &viewport);
         for (const auto &[index, text] : voice_labels) {

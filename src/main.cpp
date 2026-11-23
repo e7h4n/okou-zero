@@ -635,6 +635,14 @@ int main(int argc, char **argv) {
             ui.handle({Key::up, {}});
             ui.render();
             check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
+            for (int i = 0; i < 8; ++i)
+                ui.handle({Key::right, {}});
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"current-clip"});
+            for (int i = 0; i < 8; ++i)
+                ui.handle({Key::left, {}});
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
             ui.handle({Key::escape, {}, false, false});
             check(ui.page == Page::settings);
             ui.handle({Key::escape, {}, false, false});
