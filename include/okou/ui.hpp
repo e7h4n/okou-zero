@@ -37,6 +37,8 @@ class UI {
     ~UI();
     Action handle(const Input &input);
     void render();
+    void show_volume(VolumeStatus volume);
+    void dismiss_expired_volume();
     bool update_safe() const;
     void demo(const std::string &screen);
     void select_thread(const Thread &thread);
@@ -52,6 +54,8 @@ class UI {
     lv_obj_t *header_ = nullptr;
     lv_obj_t *body_ = nullptr;
     lv_obj_t *footer_ = nullptr;
+    lv_obj_t *volume_overlay_ = nullptr;
+    std::chrono::steady_clock::time_point volume_until_;
     lv_font_t *font_ = nullptr;
     lv_font_t *detail_font_ = nullptr;
     MarkdownFonts markdown_fonts_;

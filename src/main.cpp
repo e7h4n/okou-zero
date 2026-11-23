@@ -3,6 +3,7 @@
 #include "okou/diagnostics.hpp"
 #include "okou/ui.hpp"
 #include "update_process.hpp"
+#include "volume_control.hpp"
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -674,6 +675,7 @@ int main(int argc, char **argv) {
         // glass until initialization produces chat, login, setup, or an error.
         bool awaiting_first_screen = !OKOU_ZERO_DESKTOP && !demo;
         UpdateProcess updater;
+        VolumeControl volume;
         constexpr auto enter_hold_delay = std::chrono::milliseconds(350);
         std::chrono::steady_clock::time_point enter_pressed{};
         std::string enter_thread;
@@ -731,6 +733,12 @@ int main(int argc, char **argv) {
             for (auto input : inputs) {
                 if (updater.installing())
                     continue;
+                if (input.key == Key::volume_up || input.key == Key::volume_down ||
+                    input.key == Key::mute) {
+                    if (!demo)
+                        volume.press(input.key);
+                    continue;
+                }
                 if (input.key == Key::escape)
                     enter_thread.clear();
                 if (input.key == Key::enter_cancel) {
@@ -836,6 +844,9 @@ int main(int argc, char **argv) {
                 ui.render();
                 dirty = false;
             }
+            if (auto current_volume = volume.poll())
+                ui.show_volume(*current_volume);
+            ui.dismiss_expired_volume();
             ui.update_recording_clock();
             lv_timer_handler();
             display.present();

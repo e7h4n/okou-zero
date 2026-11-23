@@ -24,6 +24,15 @@ Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl) {
     out.shift = shift;
     out.ctrl = ctrl;
     switch (code) {
+    case KEY_VOLUMEUP:
+        out.key = Key::volume_up;
+        return out;
+    case KEY_VOLUMEDOWN:
+        out.key = Key::volume_down;
+        return out;
+    case KEY_MUTE:
+        out.key = Key::mute;
+        return out;
     case KEY_SPACE:
         if (!ctrl) {
             out.key = Key::space;
@@ -174,6 +183,17 @@ std::vector<Input> Keyboard::poll() {
                 if (!event.key.repeat)
                     out.key = Key::enter_down;
                 break;
+            case SDLK_VOLUMEUP:
+                out.key = Key::volume_up;
+                break;
+            case SDLK_VOLUMEDOWN:
+                out.key = Key::volume_down;
+                break;
+            case SDLK_AUDIOMUTE:
+            case SDLK_MUTE:
+                if (!event.key.repeat)
+                    out.key = Key::mute;
+                break;
             case SDLK_SPACE:
                 if (!event.key.repeat && !out.ctrl) {
                     out.key = Key::space;
@@ -279,7 +299,8 @@ std::vector<Input> Keyboard::poll() {
                     {event.value ? Key::enter_down : Key::enter_up, {}, shift_, ctrl_});
             continue;
         }
-        if (!event.value || (event.code == KEY_SPACE && event.value == 2))
+        if (!event.value ||
+            ((event.code == KEY_SPACE || event.code == KEY_MUTE) && event.value == 2))
             continue;
         auto input = map_key(event.code, shift_, caps_, ctrl_);
         if (input.key != Key::none)

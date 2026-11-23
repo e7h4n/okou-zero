@@ -11,6 +11,9 @@ enum class Key {
     none,
     text,
     space,
+    volume_up,
+    volume_down,
+    mute,
     enter,
     enter_down,
     enter_up,
@@ -39,6 +42,10 @@ struct Input {
 };
 Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl);
 void erase_utf8(std::string &text);
+struct VolumeStatus {
+    int percent = -1;
+    bool muted = false;
+};
 struct BatteryStatus {
     int percent = -1;
     bool charging = false;

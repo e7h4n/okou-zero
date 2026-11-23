@@ -82,6 +82,8 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
     lv_obj_set_style_bg_opa(footer_, LV_OPA_COVER, 0);
 }
 UI::~UI() {
+    if (volume_overlay_)
+        lv_obj_delete(volume_overlay_);
     lv_obj_clean(root_);
     for (auto *face : {markdown_fonts_.code, markdown_fonts_.heading, markdown_fonts_.italic,
                        markdown_fonts_.bold})
@@ -286,6 +288,28 @@ void UI::update_recording_clock() {
     char duration[16];
     std::snprintf(duration, sizeof(duration), "%02ld:%02ld", elapsed / 60, elapsed % 60);
     lv_label_set_text(recording_clock_, duration);
+}
+void UI::show_volume(VolumeStatus volume) {
+    if (volume_overlay_)
+        lv_obj_delete(volume_overlay_);
+    auto *top = lv_display_get_layer_top(lv_obj_get_display(root_));
+    volume_overlay_ = shape(top, 118, 2, 131, 21, 5, ink);
+    bool quiet = volume.muted || volume.percent == 0;
+    const char *symbol = quiet ? LV_SYMBOL_MUTE : LV_SYMBOL_VOLUME_MAX;
+    auto *icon = label(volume_overlay_, symbol, 6, 4, 17, paper, 16);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_12, 0);
+    std::string caption = volume.percent < 0 ? "Audio unavailable"
+                                             : (volume.muted ? "Muted  " : "Volume  ") +
+                                                   std::to_string(volume.percent) + "%";
+    auto *text = label(volume_overlay_, caption, 24, 2, 104, paper, 18);
+    lv_obj_set_style_text_font(text, detail_font_ ? detail_font_ : &lv_font_montserrat_12, 0);
+    volume_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+}
+void UI::dismiss_expired_volume() {
+    if (volume_overlay_ && std::chrono::steady_clock::now() >= volume_until_) {
+        lv_obj_delete(volume_overlay_);
+        volume_overlay_ = nullptr;
+    }
 }
 void UI::render_recording() {
     if (recording_overlay_)
