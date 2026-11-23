@@ -12,6 +12,7 @@
 #include <iostream>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 
 namespace okou {
 namespace {
@@ -467,11 +468,11 @@ class Engine {
                     result = voice_file_id_.empty() ? SendResult{"", true}
                                                     : s->client->send_voice(thread, voice_file_id_);
                 }
-                voice_file_id_.clear();
                 voice_pcm_ = std::vector<std::int16_t>();
-                emit([id = thread_id, result = std::move(result)](UI &ui) {
+                emit([id = thread_id, result = std::move(result),
+                      file_id = std::exchange(voice_file_id_, {})](UI &ui) {
                     ui.complete_send(id, "[Voice message]", result.uncertain,
-                                     result.client_event_id);
+                                     result.client_event_id, file_id);
                     ui.busy = false;
                     ui.status =
                         result.uncertain ? "Send uncertain; do not resend" : "Message accepted";
@@ -612,7 +613,9 @@ int main(int argc, char **argv) {
             check(ui.handle({Key::text, "中文 input!", false, false}) == Action::none);
             check(ui.draft.empty());
             check(ui.handle({Key::enter, {}, false, false}) == Action::none);
-            ui.complete_send(ui.current.id, "spoken message", false, "voice_event");
+            ui.complete_send(ui.current.id, "spoken message", false, "voice_event", "new-clip");
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"new-clip"});
             check(ui.messages.back().id == "voice_event");
             ui.update_history({});
             check(ui.messages.size() == 1);

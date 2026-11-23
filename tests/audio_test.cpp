@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include "../src/playback_gain.hpp"
 #include "okou/core.hpp"
 #include <cstdlib>
 #include <iostream>
@@ -39,6 +40,16 @@ int main() {
     const std::vector<std::uint8_t> expected{0, 0, 1, 0, 255, 255, 0, 128, 255, 127, 0x34, 0x12};
     check(std::vector<std::uint8_t>(bytes.begin() + 44, bytes.end()) == expected,
           "Signed little-endian samples");
+    auto quiet = okou::wav({-383, 0, 200});
+    auto *pcm = quiet.data() + 44;
+    const auto gain = okou::detail::playback_gain(okou::detail::pcm_peak(pcm, 3));
+    okou::detail::apply_playback_gain(pcm, 3, gain);
+    check(okou::detail::pcm16le(pcm) == -12256 && okou::detail::pcm16le(pcm + 2) == 0 &&
+              okou::detail::pcm16le(pcm + 4) == 6400,
+          "Quiet speech amplified with one bounded gain");
+    check(okou::detail::playback_gain(okou::detail::pcm_peak(expected.data(), 6)) == 1.0f &&
+              okou::detail::playback_gain(0) == 1.0f,
+          "Full-range PCM and silence stay unchanged");
     // No start() call: these lifecycle checks must never open a capture device.
     okou::AudioCapture audio("not-opened-by-tests");
     check(!audio.recording(), "Constructor never records");

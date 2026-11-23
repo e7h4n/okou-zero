@@ -157,13 +157,15 @@ void UI::reset_account() {
     busy = recording = uncertain = submitting = voice_pending = voice_working = false;
 }
 void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
-                       const std::string &event_id) {
+                       const std::string &event_id, const std::string &voice_file_id) {
     if (current.id == thread_id) {
         uncertain = was_uncertain;
         if (!was_uncertain && !event_id.empty() &&
             std::none_of(messages.begin(), messages.end(),
                          [&](const Message &m) { return m.id == event_id; })) {
             Message message{event_id, "user", text, false};
+            if (!voice_file_id.empty())
+                message.voice_clips.push_back(voice_file_id);
             acknowledged_messages_.push_back(message);
             if (acknowledged_messages_.size() > 30)
                 acknowledged_messages_.erase(acknowledged_messages_.begin());

@@ -42,7 +42,7 @@ class UI {
     void select_thread(const Thread &thread);
     void reset_account();
     void complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
-                       const std::string &event_id = {});
+                       const std::string &event_id = {}, const std::string &voice_file_id = {});
     void update_history(std::vector<Message> history);
     void update_recording_clock();
     void reconcile_send(const std::string &thread_id, bool pending);
