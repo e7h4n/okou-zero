@@ -160,7 +160,9 @@ void UI::complete_send(const std::string &thread_id, const std::string &text, bo
                        const std::string &event_id) {
     if (current.id == thread_id) {
         uncertain = was_uncertain;
-        if (!was_uncertain && !event_id.empty()) {
+        if (!was_uncertain && !event_id.empty() &&
+            std::none_of(messages.begin(), messages.end(),
+                         [&](const Message &m) { return m.id == event_id; })) {
             Message message{event_id, "user", text, false};
             acknowledged_messages_.push_back(message);
             if (acknowledged_messages_.size() > 30)

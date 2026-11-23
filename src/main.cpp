@@ -617,6 +617,7 @@ int main(int argc, char **argv) {
             ui.update_history({});
             check(ui.messages.size() == 1);
             ui.update_history({{"voice_event", "user", "spoken message", false}});
+            ui.complete_send(ui.current.id, "spoken message", false, "voice_event");
             check(ui.messages.size() == 1);
             ui.update_history({});
             check(ui.messages.empty());
