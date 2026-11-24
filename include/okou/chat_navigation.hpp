@@ -1,84 +1,66 @@
 #pragma once
-
 #include <algorithm>
-#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace okou {
-struct MessageBounds {
-    std::string id;
-    int top, bottom; // Content coordinates, excluding the gap after the message.
-};
-
+// Only replies have a reading position. A blank anchor follows the live reply.
 class ChatNavigation {
   public:
-    void layout(std::vector<MessageBounds> rows, int height) {
-        rows_ = std::move(rows);
-        height_ = height;
-        const auto selected = find_selection();
-        if (selected != rows_.end())
-            align(*selected, at_start_);
-        else {
-            selected_.clear();
-            from_bottom_ = std::min(from_bottom_, limit());
+    void layout(std::vector<std::string> ids) {
+        ids_ = std::move(ids);
+        auto it = std::find(ids_.begin(), ids_.end(), anchor_);
+        if (it == ids_.end())
+            anchor_.clear();
+        position_ = anchor_.empty() ? static_cast<int>(ids_.size()) - 1
+                                    : static_cast<int>(it - ids_.begin());
+        std::string current = position_ < 0 ? std::string{} : ids_[position_];
+        if (current != measured_) {
+            offset_ = limit_ = 0;
+            measured_ = std::move(current);
         }
     }
-    void scroll(int towards_top) {
-        selected_.clear();
-        from_bottom_ = std::clamp(from_bottom_ + towards_top, 0, limit());
+    void measure(int content, int viewport) {
+        limit_ = std::max(0, content - viewport);
+        offset_ = std::min(offset_, limit_);
     }
-    void jump(bool right) {
-        if (rows_.empty())
+    void scroll(int delta) {
+        if (position_ < 0)
             return;
-        const int top = offset();
-        auto row = find_selection();
-        if (row == rows_.end()) {
-            // At the live end the latest message is current. Elsewhere use the
-            // message at the top of the reading area (including after scrolling).
-            row = from_bottom_ == 0 ? std::prev(rows_.end())
-                                    : std::find_if(rows_.begin(), rows_.end(),
-                                                   [top](auto &r) { return r.bottom > top; });
+        offset_ = std::clamp(offset_ + delta, 0, limit_);
+        if (offset_ > 0)
+            anchor_ = ids_[position_];
+    }
+    void jump(bool newer) {
+        if (position_ < 0)
+            return;
+        if (newer && offset_ < limit_) {
+            scroll(limit_);
+            return;
         }
-        bool start = !right;
-        if (right && row->bottom <= top + height_ && std::next(row) != rows_.end()) {
-            ++row;
-            start = true;
-        } else if (!right && row->top >= top && row != rows_.begin()) {
-            --row;
-            start = false;
+        if (!newer && offset_) {
+            scroll(-offset_);
+            return;
         }
-        selected_ = row->id;
-        at_start_ = start;
-        align(*row, start);
+        int next = std::clamp(position_ + (newer ? 1 : -1), 0, static_cast<int>(ids_.size()) - 1);
+        if (next != position_) {
+            position_ = next;
+            measured_ = ids_[next];
+            offset_ = limit_ = 0;
+        }
+        anchor_ = position_ + 1 == static_cast<int>(ids_.size()) ? std::string{} : ids_[position_];
+    }
+    int position() const {
+        return position_;
     }
     int offset() const {
-        return limit() - from_bottom_;
-    }
-    const std::string &selected() const {
-        return selected_;
+        return offset_;
     }
 
   private:
-    int limit() const {
-        return rows_.empty() ? 0 : std::max(0, rows_.back().bottom - height_);
-    }
-    std::vector<MessageBounds>::iterator find_selection() {
-        return std::find_if(rows_.begin(), rows_.end(),
-                            [this](auto &r) { return !selected_.empty() && r.id == selected_; });
-    }
-    void align(const MessageBounds &row, bool start) {
-        // A short neighbor may fit already. Keep it entirely visible without
-        // moving backwards just to align it to the opposite viewport edge.
-        int pos = row.bottom - row.top <= height_
-                      ? std::clamp(offset(), row.bottom - height_, row.top)
-                      : (start ? row.top : row.bottom - height_);
-        from_bottom_ = limit() - std::clamp(pos, 0, limit());
-    }
-    std::vector<MessageBounds> rows_;
-    std::string selected_;
-    int from_bottom_ = 0, height_ = 0;
-    bool at_start_ = false;
+    std::vector<std::string> ids_;
+    std::string anchor_, measured_;
+    int position_ = -1, offset_ = 0, limit_ = 0;
 };
 } // namespace okou

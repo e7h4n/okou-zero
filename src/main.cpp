@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <csignal>
 #include <cstdlib>
+#include <curl/curl.h>
 #include <deque>
 #include <iostream>
 #include <thread>
@@ -43,6 +44,7 @@ class Engine {
     std::thread playback_;
     std::atomic_bool playback_active_{false}, playback_paused_{false}, playback_stop_{false};
     std::atomic_bool playback_failed_{false};
+    std::atomic_uint playback_seconds_{0};
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::function<void()>> tasks_;
@@ -81,6 +83,10 @@ class Engine {
         std::string text = status == 401   ? "Sign-in expired; sign in again"
                            : status == 403 ? "Access not granted; check OAuth scopes"
                                            : "Could not complete request; Ctrl+L to refresh";
+        if (http && (http->curl_code == CURLE_COULDNT_CONNECT ||
+                     http->curl_code == CURLE_COULDNT_RESOLVE_HOST ||
+                     http->curl_code == CURLE_COULDNT_RESOLVE_PROXY))
+            text = "Network unavailable";
         emit([text](UI &ui) {
             ui.status = text;
             ui.busy = false;
@@ -347,7 +353,9 @@ class Engine {
                         ui.busy = false;
                         if (pending)
                             ui.status = "Send uncertain; do not resend";
-                        else if (ui.status == "Loading conversation...")
+                        else if (ui.status == "Loading conversation..." ||
+                                 ui.status == "Network unavailable" ||
+                                 ui.status == "Send uncertain; do not resend")
                             ui.status.clear();
                     }
                 }
@@ -357,6 +365,9 @@ class Engine {
     void stop_playback() {
         playback_stop_ = true;
         playback_failed_ = false;
+    }
+    unsigned playback_seconds() const {
+        return playback_seconds_;
     }
     std::string playback_status() const {
         if (playback_stop_)
@@ -376,6 +387,7 @@ class Engine {
         if (playback_.joinable())
             playback_.join();
         playback_stop_ = playback_paused_ = playback_failed_ = false;
+        playback_seconds_ = 0;
         playback_active_ = true;
         auto s = std::atomic_load(&session_);
         playback_ = std::thread([this, s, clips] {
@@ -403,7 +415,7 @@ class Engine {
                     if (std::fflush(audio.get()) != 0 || std::fseek(audio.get(), 0, SEEK_SET) != 0)
                         throw std::runtime_error("Could not read recording");
                     if (!playback_stop_)
-                        play_wav(audio.get(), playback_paused_, playback_stop_);
+                        play_wav(audio.get(), playback_paused_, playback_stop_, playback_seconds_);
                 }
             } catch (const std::exception &ex) {
                 if (!playback_stop_) {
@@ -569,7 +581,8 @@ int main(int argc, char **argv) {
                 config_path = argv[++i];
             else if (arg == "--help") {
                 std::cout << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen "
-                             "login|chat|recording|update]\n  --screenshot PATH "
+                             "login|chat|history|recording|playback|paused|sending|waiting|"
+                             "uncertain|offline|update]\n  --screenshot PATH "
                              "(simulator only)\n "
                              " --self-test-ui\n";
                 return 0;
@@ -630,18 +643,21 @@ int main(int argc, char **argv) {
             ui.reconcile_send(ui.current.id, false);
             check(!ui.uncertain);
             ui.messages = {{"old", "user", "[Voice message]", false, {"old-clip"}},
-                           {"middle", "assistant", "Reply\nReply\nReply\nReply", false},
+                           {"middle", "assistant", "1\n2\n3\n4\n5\n6\n7\n8\n9", false},
                            {"current", "user", "[Voice message]", false, {"current-clip"}},
-                           {"next", "user", "[Voice message]", false, {"next-clip"}}};
+                           {"latest", "assistant", "Current reply", false}};
             ui.render();
             check(ui.visible_voice_clips == std::vector<std::string>{"current-clip"});
             check(ui.handle({Key::space, " "}) == Action::playback);
-            ui.handle({Key::up, {}});
-            ui.handle({Key::up, {}});
+            ui.handle({Key::left, {}});
+            ui.render();
+            ui.handle({Key::down, {}});
             ui.render();
             check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
-            for (int i = 0; i < 8; ++i)
-                ui.handle({Key::right, {}});
+            ui.handle({Key::right, {}});
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
+            ui.handle({Key::right, {}});
             ui.render();
             check(ui.visible_voice_clips == std::vector<std::string>{"current-clip"});
             for (int i = 0; i < 8; ++i)
@@ -847,6 +863,9 @@ int main(int argc, char **argv) {
             if (auto current_volume = volume.poll())
                 ui.show_volume(*current_volume);
             ui.dismiss_expired_volume();
+            ui.update_clock();
+            if (engine)
+                ui.update_playback_clock(engine->playback_seconds());
             ui.update_recording_clock();
             lv_timer_handler();
             display.present();

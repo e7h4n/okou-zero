@@ -113,10 +113,13 @@ replaced. Public CI tests mock updater network calls and never install a real up
 
 | Key | Action |
 | --- | --- |
-| Up / down, Enter | Navigate settings or scroll conversation history |
+| Up / down | Scroll the current reply one line, or select a settings item |
+| Left / right | Jump to the beginning / end of the reply, then to the older / newer reply |
+| Page Up / Page Down | Scroll the current reply three lines |
+| Enter in settings | Open the selected action |
 | Hold Enter in chat | Record while held, then release to send a voice message |
 | Volume up / down, Mute | Adjust system output by 10%, or toggle mute. The screen briefly shows the resulting level. |
-| Space in chat | Play the first visible Zero voice message, pause, or resume |
+| Space in chat | Play the voice clips associated with the selected reply (or a newly sent recording), pause, or resume |
 | Ctrl+R | Retry a retained recording or failed voice message |
 | Esc while recording/recovering | Discard recording and retained voice work |
 | Esc | Back/menu |

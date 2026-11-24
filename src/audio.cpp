@@ -55,7 +55,9 @@ std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm) {
     return out;
 }
 
-void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop) {
+void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop,
+              std::atomic_uint &seconds) {
+    seconds = 0;
     std::array<unsigned char, 44> header{};
     auto matches = [&](std::size_t offset, const char *text) {
         return std::memcmp(header.data() + offset, text, 4) == 0;
@@ -135,6 +137,7 @@ void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic
         if (pa_simple_write(audio.get(), buffer.data(), frames * 2, nullptr) < 0)
             throw std::runtime_error("Audio playback failed");
         written += frames;
+        seconds = static_cast<unsigned>(written / rate);
     }
 }
 
