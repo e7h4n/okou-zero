@@ -36,6 +36,7 @@ class Engine {
     };
     std::shared_ptr<Session> session_;
     std::unique_ptr<Realtime> realtime_;
+    RecordingWaveform &waveform_;
     std::unique_ptr<AudioCapture> audio_;
     std::vector<std::int16_t> voice_pcm_;
     std::string voice_file_id_;
@@ -128,7 +129,8 @@ class Engine {
     }
 
   public:
-    explicit Engine(Config config) : session_(std::make_shared<Session>(std::move(config))) {
+    Engine(Config config, RecordingWaveform &waveform)
+        : session_(std::make_shared<Session>(std::move(config))), waveform_(waveform) {
         worker_ = std::thread([this] {
             while (!stopping_) {
                 std::function<void()> task;
@@ -438,7 +440,7 @@ class Engine {
                     audio_ = std::make_unique<AudioCapture>(s->config.capture_device);
                     if (voice_cancelled_)
                         return;
-                    audio_->start();
+                    audio_->start(&waveform_);
                     emit([this, started = std::chrono::steady_clock::now()](UI &ui) {
                         if (voice_cancelled_ || !ui.recording)
                             return;
@@ -607,7 +609,7 @@ int main(int argc, char **argv) {
             ui.demo(screen);
         else {
             ui.busy = true;
-            engine = std::make_unique<Engine>(config);
+            engine = std::make_unique<Engine>(config, ui.recording_waveform);
             engine->initialize();
         }
         if (self_test) {

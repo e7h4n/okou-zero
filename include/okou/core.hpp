@@ -176,11 +176,12 @@ class Realtime {
 std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm);
 void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop,
               std::atomic_uint &seconds);
+class RecordingWaveform;
 class AudioCapture {
   public:
     explicit AudioCapture(std::string device);
     ~AudioCapture();
-    void start();
+    void start(RecordingWaveform *waveform = nullptr);
     std::vector<std::int16_t> finish();
     void cancel();
     bool recording() const;

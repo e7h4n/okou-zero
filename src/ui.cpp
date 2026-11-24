@@ -276,6 +276,11 @@ void UI::complete_send(const std::string &thread_id, const std::string &text, bo
                 acknowledged_messages_.erase(acknowledged_messages_.begin());
             messages.push_back(std::move(message));
         }
+        if (!was_uncertain && !event_id.empty() && !messages.empty() &&
+            messages.back().id == event_id) {
+            navigation_ = {};
+            turn_direction_ = 0;
+        }
     }
     submitting = false;
 }
@@ -459,9 +464,29 @@ void UI::render_voice_panel(bool capturing) {
             auto *obj = lv_event_get_target_obj(e);
             lv_area_t a;
             lv_obj_get_coords(obj, &a);
-            double phase = ui->playback_status.rfind("Paused", 0) == 0 && !ui->recording
-                               ? 0.
-                               : lv_tick_get() / 470.;
+            if (ui->recording) {
+                const auto peaks = ui->recording_waveform.snapshot();
+                // Compress the display range so quiet speech is visible without changing the audio.
+                const auto height = [](int amplitude) {
+                    return static_cast<int>(std::lround(
+                        32 * std::log1p(std::abs(amplitude) / 48.0) / std::log1p(32768.0 / 48.0)));
+                };
+                int prev_high = 0, prev_low = 0;
+                for (std::size_t i = 0; i < peaks.size(); ++i) {
+                    const int x = static_cast<int>(i) * 6;
+                    const int high = height(peaks[i].high), low = height(peaks[i].low);
+                    if (i) {
+                        draw_segment(e, a, x - 6, 36 - prev_high / 2, x, 36 - high / 2, border);
+                        draw_segment(e, a, x - 6, 36 + prev_low / 2, x, 36 + low / 2, border);
+                        draw_segment(e, a, x - 6, 36 - prev_high, x, 36 - high, gold);
+                        draw_segment(e, a, x - 6, 36 + prev_low, x, 36 + low, gold);
+                    }
+                    prev_high = high;
+                    prev_low = low;
+                }
+                return;
+            }
+            double phase = ui->playback_status.rfind("Paused", 0) == 0 ? 0. : lv_tick_get() / 470.;
             for (int layer = 0; layer < 4; ++layer) {
                 int prev = 0;
                 for (int j = 0; j <= 46; ++j) {
@@ -470,10 +495,7 @@ void UI::render_voice_panel(bool capturing) {
                         static_cast<int>((4 + 3 * layer) * std::sin(j * .54 - phase + layer * .8) *
                                          std::cos(j * .14) * std::sin(j * 3.14159 / 46));
                     if (j)
-                        draw_segment(e, a, (j - 1) * 6, prev, j * 6, y,
-                                     layer < 3       ? border
-                                     : ui->recording ? gold
-                                                     : green);
+                        draw_segment(e, a, (j - 1) * 6, prev, j * 6, y, layer < 3 ? border : green);
                     prev = y;
                 }
             }
@@ -534,6 +556,19 @@ void UI::render_header() {
     }
 }
 
+void UI::render_delivery_panel(const char *title, const char *hint, bool animate) {
+    auto *panel = folded_sheet(body_, 10, 11, 295, 108);
+    if (animate) {
+        auto *model = shape(panel, 8, 4, 125, 100, 0, face);
+        lv_obj_add_event_cb(model, draw_tesseract, LV_EVENT_DRAW_MAIN, nullptr);
+        animate_redraw(model, 24);
+    }
+    const int text_x = animate ? 145 : 16;
+    auto *heading = label(panel, title, text_x, animate ? 21 : 14, 281 - text_x, ink, 37);
+    if (markdown_fonts_.heading)
+        lv_obj_set_style_text_font(heading, markdown_fonts_.heading, 0);
+    label(panel, hint, text_x, animate ? 57 : 61, 281 - text_x, green, 36);
+}
 void UI::render_reader() {
     // Keep the original message positions to associate user events with the following reply.
     std::vector<std::size_t> replies;
@@ -560,6 +595,15 @@ void UI::render_reader() {
         add_voice(first, after);
     if (!playback_status.empty() && playback_status != "Could not play recording") {
         render_voice_panel(false);
+        return;
+    }
+
+    // Stay on the animated panel after acknowledgement until a reply or terminal event arrives.
+    if (latest && !messages.empty() && messages.back().role == "user" &&
+        !messages.back().terminal && playback_status.empty() &&
+        (status.empty() || status == "Message accepted")) {
+        render_delivery_panel(
+            "Sent", messages.back().voice_clips.empty() ? "Message" : "Voice message", true);
         return;
     }
 
@@ -610,7 +654,7 @@ void UI::render_reader() {
         const auto empty = current.id.empty() ? status
                            : busy             ? "Loading conversation..."
                            : messages.empty() ? "Hold Enter to record"
-                                              : "Waiting for reply";
+                                              : "No reply";
         label(sheet, empty, 13, 30, text_width, ink);
     }
     // For deep history, pin the newest reply at the bottom and keep the selection in view.
@@ -703,7 +747,6 @@ void UI::render() {
                 ink);
         help = "Up/down select   Enter   Esc back";
     } else if (uncertain || voice_pending || submitting || status == "Network unavailable") {
-        auto *panel = folded_sheet(body_, 10, 11, 295, 108);
         const bool retained = voice_pending && !busy;
         const bool offline = status == "Network unavailable";
         const char *title = uncertain  ? "Delivery unconfirmed"
@@ -714,17 +757,7 @@ void UI::render() {
                            : retained ? "Ctrl+R to retry   Esc to discard"
                            : offline  ? "Ctrl+L to reconnect   Esc for chat"
                                       : "Voice message";
-        const bool sending = !uncertain && !retained && !offline;
-        if (sending) {
-            auto *model = shape(panel, 8, 4, 125, 100, 0, face);
-            lv_obj_add_event_cb(model, draw_tesseract, LV_EVENT_DRAW_MAIN, nullptr);
-            animate_redraw(model, 24);
-        }
-        const int text_x = sending ? 145 : 16;
-        auto *heading = label(panel, title, text_x, sending ? 21 : 14, 281 - text_x, ink, 37);
-        if (markdown_fonts_.heading)
-            lv_obj_set_style_text_font(heading, markdown_fonts_.heading, 0);
-        label(panel, hint, text_x, sending ? 57 : 61, 281 - text_x, green, 36);
+        render_delivery_panel(title, hint, !uncertain && !retained && !offline);
         return;
     } else {
         render_reader();
@@ -734,8 +767,6 @@ void UI::render() {
             help = playback_status;
         else if (!status.empty() && status != "Message accepted" && !current.id.empty())
             help = status;
-        else if (!messages.empty() && messages.back().role == "user")
-            help = "Waiting for reply…";
         if (help.empty() || recording_overlay_)
             return;
         lv_obj_set_style_bg_color(footer_, lv_color_hex(paper), 0);
