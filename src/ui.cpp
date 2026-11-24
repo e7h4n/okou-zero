@@ -378,9 +378,9 @@ void UI::render_voice_panel(bool capturing) {
     const auto color = capturing ? gold : green;
     const bool paused = !capturing && playback_status.rfind("Paused", 0) == 0;
     auto *title = label(recording_overlay_,
-                        capturing ? "录音"
-                        : paused  ? "已暂停"
-                                  : "语音回放",
+                        capturing ? "Recording"
+                        : paused  ? "Paused"
+                                  : "Voice playback",
                         14, 4, 165, color, 30);
     if (markdown_fonts_.heading)
         lv_obj_set_style_text_font(title, markdown_fonts_.heading, 0);
@@ -434,9 +434,9 @@ void UI::render_voice_panel(bool capturing) {
         lv_anim_start(&anim);
     }
     label(recording_overlay_,
-          capturing ? "松开 Enter 发送"
-          : paused  ? "空格继续"
-                    : "空格暂停",
+          capturing ? "Release Enter to send"
+          : paused  ? "Space to resume"
+                    : "Space to pause",
           14, 115, 285, ink, 26);
 }
 void UI::update_playback_clock(unsigned seconds) {
@@ -550,8 +550,8 @@ void UI::render_reader() {
     } else {
         const auto empty = current.id.empty() ? status
                            : busy             ? "Loading conversation..."
-                           : messages.empty() ? "按住 Enter 录音"
-                                              : "等待回复";
+                           : messages.empty() ? "Hold Enter to record"
+                                              : "Waiting for reply";
         label(sheet, empty, 13, 30, 224, ink);
     }
     // For deep history, pin the newest reply at the bottom and keep the selection in view.
@@ -643,14 +643,14 @@ void UI::render() {
         auto *panel = folded_sheet(body_, 10, 11, 295, 108);
         const bool retained = voice_pending && !busy;
         const bool offline = status == "Network unavailable";
-        const char *title = uncertain  ? "发送待确认"
-                            : retained ? "录音已保留"
-                            : offline  ? "连接不可用"
-                                       : "正在发送";
-        const char *hint = uncertain  ? "Ctrl+L 刷新会话记录"
-                           : retained ? "Ctrl+R 重试　Esc 丢弃"
-                           : offline  ? "Ctrl+L 重连　Esc 返回会话"
-                                      : "语音消息";
+        const char *title = uncertain  ? "Delivery unconfirmed"
+                            : retained ? "Recording saved"
+                            : offline  ? "Offline"
+                                       : "Sending";
+        const char *hint = uncertain  ? "Ctrl+L to refresh chat"
+                           : retained ? "Ctrl+R to retry   Esc to discard"
+                           : offline  ? "Ctrl+L to reconnect   Esc for chat"
+                                      : "Voice message";
         auto *heading = label(panel, title, 16, 14, 265, ink, 37);
         if (markdown_fonts_.heading)
             lv_obj_set_style_text_font(heading, markdown_fonts_.heading, 0);
@@ -665,7 +665,7 @@ void UI::render() {
         else if (!status.empty() && status != "Message accepted" && !current.id.empty())
             help = status;
         else if (!messages.empty() && messages.back().role == "user")
-            help = "等待回复…";
+            help = "Waiting for reply…";
         if (help.empty() || recording_overlay_)
             return;
         lv_obj_set_style_bg_color(footer_, lv_color_hex(paper), 0);
@@ -694,11 +694,13 @@ void UI::demo(const std::string &screen) {
         demo_thread.id = "demo-thread";
         demo_thread.title = "Cardputer Zero";
         select_thread(demo_thread);
-        messages = {{"event_1", "user", "帮我整理今天要做的事", false},
-                    {"event_2", "assistant",
-                     "## 今日安排\n\n1. **确认时间**，再回复团队。\n2. 查看 `README.md`。", true}};
+        messages = {
+            {"event_1", "user", "Help me plan my day", false},
+            {"event_2", "assistant",
+             "## Today’s plan\n\n1. **Confirm the time** with the team.\n2. Read `README.md`.",
+             true}};
         if (screen == "waiting")
-            messages.push_back({"waiting", "user", "稍后见", false});
+            messages.push_back({"waiting", "user", "See you later", false});
         if (screen == "sending")
             busy = submitting = voice_pending = true;
         if (screen == "uncertain")
@@ -706,20 +708,22 @@ void UI::demo(const std::string &screen) {
         if (screen == "offline")
             status = "Network unavailable";
         if (screen == "history") {
-            messages = {{"u1", "user", "行程", false, {"demo-clip"}},
-                        {"a1", "assistant", "## 出发之前\n\n查看路线和天气。", false},
-                        {"a2", "assistant", "第一站是湖边。", false},
-                        {"u2", "user", "补充一条", false},
-                        {"u3", "user", "确认时间", false},
-                        {"a3", "assistant", "## 途中休息\n\n给相机充电。", false},
-                        {"a4", "assistant", "## 下一站\n\n沿小路向东。", false},
-                        {"a5", "assistant", "## 傍晚集合\n\n在车站等候。", false},
-                        {"u4", "user", "打包清单", false},
-                        {"a6", "assistant",
-                         "## "
-                         "出行清单\n\n带上水壶和外套。\n把地图下载到手机。\n检查相机的电量。\n确认"
-                         "明早的车票。\n在出发前联系队友。\n最后收好钥匙。",
-                         false}};
+            messages = {
+                {"u1", "user", "Trip itinerary", false, {"demo-clip"}},
+                {"a1", "assistant", "## Before leaving\n\nCheck the route and weather.", false},
+                {"a2", "assistant", "The lake is our first stop.", false},
+                {"u2", "user", "One more thing", false},
+                {"u3", "user", "Confirm the time", false},
+                {"a3", "assistant", "## Rest stop\n\nCharge the camera.", false},
+                {"a4", "assistant", "## Next stop\n\nFollow the path east.", false},
+                {"a5", "assistant", "## Meet at dusk\n\nWait at the station.", false},
+                {"u4", "user", "Packing list", false},
+                {"a6", "assistant",
+                 "## "
+                 "Trip checklist\n\nPack water and a jacket.\nSave an offline map.\nCheck the "
+                 "camera battery.\nConfirm your train ticket.\nMessage your team.\nPick up your "
+                 "keys.",
+                 false}};
         }
         if (screen == "playback" || screen == "paused")
             playback_status =
