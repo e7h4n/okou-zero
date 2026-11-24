@@ -51,6 +51,15 @@ int main() {
     auto *voice = okou::markdown_body(screen, "[Voice message]", 0, 0, 299, fonts);
     check(lv_obj_has_class(voice, &lv_label_class));
     check(std::string(lv_label_get_text(voice)) == "[Voice message]");
+    std::string heading;
+    fonts.heading = &strong_font;
+    auto *pinned =
+        okou::markdown_body(screen, "# Short title\n\nFirst line", 0, 0, 220, fonts, &heading);
+    check(heading == "Short title" && contents(lv_obj_get_child(pinned, 0)) == "First line");
+    auto *long_title =
+        okou::markdown_body(screen, "# A heading too wide to pin", 0, 0, 40, fonts, &heading);
+    check(heading.empty() &&
+          contents(lv_obj_get_child(long_title, 0)) == "A heading too wide to pin");
     lv_display_delete(display);
     lv_deinit();
 }

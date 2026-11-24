@@ -4,6 +4,7 @@
 #include "okou/markdown.hpp"
 #include "okou/platform.hpp"
 #include <chrono>
+#include <ctime>
 
 namespace okou {
 class EmojiRenderer;
@@ -47,6 +48,8 @@ class UI {
                        const std::string &event_id = {}, const std::string &voice_file_id = {});
     void update_history(std::vector<Message> history);
     void update_recording_clock();
+    void update_clock();
+    void update_playback_clock(unsigned seconds);
     void reconcile_send(const std::string &thread_id, bool pending);
 
   private:
@@ -64,8 +67,16 @@ class UI {
     std::vector<Message> acknowledged_messages_;
     lv_obj_t *recording_overlay_ = nullptr;
     lv_obj_t *recording_clock_ = nullptr;
+    lv_obj_t *playback_clock_ = nullptr;
+    long playback_seconds_ = -1;
     long recording_seconds_ = -1;
-    void render_recording();
+    lv_obj_t *clock_ = nullptr;
+    std::time_t clock_minute_ = -1;
+    int turn_direction_ = 0;
+    int reading_line_ = 22;
+    void render_voice_panel(bool capturing);
+    void render_reader();
+    void render_header();
     lv_obj_t *label(lv_obj_t *parent, const std::string &text, int x, int y, int width,
                     std::uint32_t color, int height = 0);
     lv_obj_t *row(const std::string &title, const std::string &detail, int y, bool selected,

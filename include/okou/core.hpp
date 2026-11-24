@@ -173,7 +173,8 @@ class Realtime {
     std::unique_ptr<Impl> impl_;
 };
 std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm);
-void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop);
+void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop,
+              std::atomic_uint &seconds);
 class AudioCapture {
   public:
     explicit AudioCapture(std::string device);

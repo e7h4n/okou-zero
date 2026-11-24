@@ -199,7 +199,7 @@ int render_cell(lv_obj_t *body, const Cell &cell, const Block &block, int x, int
     lv_obj_set_pos(group, x, y);
     bool pre = block.kind == Kind::code;
     if (pre)
-        shade(group, 0xece8e4);
+        shade(group, 0x263735);
     for (const auto &run : cell) {
         auto *span = lv_spangroup_add_span(group);
         lv_span_set_text(span, run.text.c_str());
@@ -212,9 +212,9 @@ int render_cell(lv_obj_t *body, const Cell &cell, const Block &block, int x, int
         if (font)
             lv_style_set_text_font(style, font);
         if (run.style & link)
-            lv_style_set_text_color(style, lv_color_hex(0x275b71));
+            lv_style_set_text_color(style, lv_color_hex(0x9ef1ce));
         if (run.style & code)
-            lv_style_set_text_color(style, lv_color_hex(0x754327));
+            lv_style_set_text_color(style, lv_color_hex(0xf2bb79));
         unsigned decor = ((run.style & link) ? LV_TEXT_DECOR_UNDERLINE : 0) |
                          ((run.style & strike) ? LV_TEXT_DECOR_STRIKETHROUGH : 0);
         if (decor)
@@ -231,7 +231,9 @@ int render_cell(lv_obj_t *body, const Cell &cell, const Block &block, int x, int
 } // namespace
 
 lv_obj_t *markdown_body(lv_obj_t *parent, const std::string &source, int x, int y, int width,
-                        const MarkdownFonts &fonts) {
+                        const MarkdownFonts &fonts, std::string *pinned_heading) {
+    if (pinned_heading)
+        pinned_heading->clear();
     Document doc;
     const MD_PARSER parser{0,           MD_DIALECT_GITHUB | MD_FLAG_NOHTML,
                            enter_block, leave_block,
@@ -253,6 +255,18 @@ lv_obj_t *markdown_body(lv_obj_t *parent, const std::string &source, int x, int 
     lv_obj_remove_style_all(body);
     lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_pos(body, x, y);
+    if (pinned_heading && doc.blocks.front().kind == Kind::heading && fonts.heading) {
+        std::string title;
+        for (const auto &run : doc.blocks.front().cells.front())
+            title += run.text;
+        lv_point_t size{};
+        lv_text_get_size(&size, title.c_str(), fonts.heading, 0, 0, LV_COORD_MAX,
+                         LV_TEXT_FLAG_NONE);
+        if (size.x <= width && title.find('\n') == std::string::npos) {
+            *pinned_heading = std::move(title);
+            doc.blocks.erase(doc.blocks.begin());
+        }
+    }
     int bottom = 0;
     for (const auto &block : doc.blocks) {
         int left = block.indent;
@@ -285,7 +299,7 @@ lv_obj_t *markdown_body(lv_obj_t *parent, const std::string &source, int x, int 
         }
         bottom += 3;
     }
-    lv_obj_set_size(body, width, bottom - 3);
+    lv_obj_set_size(body, width, std::max(0, bottom - 3));
     return body;
 }
 } // namespace okou
