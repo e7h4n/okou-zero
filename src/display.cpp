@@ -44,7 +44,7 @@ struct Display::Impl {
     std::size_t map_size = 0;
     fb_fix_screeninfo fixed{};
     fb_var_screeninfo variable{};
-    bool dirty = true;
+    bool dirty = true, first_frame = true;
 #if OKOU_ZERO_DESKTOP
     SDL_Window *window = nullptr;
     SDL_Renderer *renderer = nullptr;
@@ -77,7 +77,7 @@ struct Display::Impl {
             if (y >= 0 && y < 170 && area->x1 >= 0 && area->x2 < 320) {
                 std::memcpy(self.pixels.data() + y * 320 + area->x1, input + (y - area->y1) * width,
                             static_cast<std::size_t>(width) * 2);
-                if (self.mapped) {
+                if (self.mapped && !self.first_frame) {
                     auto offset = static_cast<std::size_t>(y + self.variable.yoffset) *
                                       self.fixed.line_length +
                                   static_cast<std::size_t>(area->x1 + self.variable.xoffset) * 2;
@@ -86,6 +86,16 @@ struct Display::Impl {
                                     static_cast<std::size_t>(width) * 2);
                 }
             }
+        }
+        // LVGL renders in strips. Publish the initial screen only once the
+        // last strip is ready, so text layout cannot expose half a chat.
+        if (self.mapped && self.first_frame && lv_display_flush_is_last(display)) {
+            auto *dest = self.mapped + self.variable.yoffset * std::size_t(self.fixed.line_length) +
+                         self.variable.xoffset * 2;
+            for (int y = 0; y < 170; ++y) {
+                std::memcpy(dest + y * self.fixed.line_length, self.pixels.data() + y * 320, 640);
+            }
+            self.first_frame = false;
         }
         self.dirty = true;
         lv_display_flush_ready(display);

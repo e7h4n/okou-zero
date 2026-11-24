@@ -1,5 +1,7 @@
 #pragma once
+#include "okou/chat_navigation.hpp"
 #include "okou/core.hpp"
+#include "okou/markdown.hpp"
 #include "okou/platform.hpp"
 #include <chrono>
 
@@ -35,12 +37,14 @@ class UI {
     ~UI();
     Action handle(const Input &input);
     void render();
+    void show_volume(VolumeStatus volume);
+    void dismiss_expired_volume();
     bool update_safe() const;
     void demo(const std::string &screen);
     void select_thread(const Thread &thread);
     void reset_account();
     void complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
-                       const std::string &event_id = {});
+                       const std::string &event_id = {}, const std::string &voice_file_id = {});
     void update_history(std::vector<Message> history);
     void update_recording_clock();
     void reconcile_send(const std::string &thread_id, bool pending);
@@ -50,10 +54,13 @@ class UI {
     lv_obj_t *header_ = nullptr;
     lv_obj_t *body_ = nullptr;
     lv_obj_t *footer_ = nullptr;
+    lv_obj_t *volume_overlay_ = nullptr;
+    std::chrono::steady_clock::time_point volume_until_;
     lv_font_t *font_ = nullptr;
     lv_font_t *detail_font_ = nullptr;
+    MarkdownFonts markdown_fonts_;
     std::unique_ptr<EmojiRenderer> emoji_;
-    int history_scroll_ = 0;
+    ChatNavigation navigation_;
     std::vector<Message> acknowledged_messages_;
     lv_obj_t *recording_overlay_ = nullptr;
     lv_obj_t *recording_clock_ = nullptr;

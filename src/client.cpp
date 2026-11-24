@@ -456,7 +456,8 @@ History read_history(const std::string &thread, const Fetch &api, const Fetch &a
                 invalid();
             n = next;
             id = rid;
-            if (rid == looking && str(row, "eventType") == "input.prompt")
+            if (!looking.empty() && (rid == looking || revoke == looking) &&
+                str(row, "eventType") == "input.prompt")
                 out.found = true;
             // The public endpoint excludes tool events. Retain only the visible window.
             out.rows.push_back(visible_row(row));
@@ -521,9 +522,20 @@ History read_history(const std::string &thread, const Fetch &api, const Fetch &a
 }
 std::vector<Message> present(const History &h) {
     std::set<std::string> revoked;
-    for (const auto &r : h.rows)
-        if (str(r, "eventType") == "control.revoke")
-            revoked.insert(str(r, "revokesEventId"));
+    // A queued input is promoted to a run-backed input with a new row ID.
+    // Keep the original send identity for both acknowledgement and navigation.
+    std::map<std::string, std::string> input_origins;
+    for (const auto &r : h.rows) {
+        auto target = str(r, "revokesEventId");
+        if (target.empty())
+            continue;
+        revoked.insert(target);
+        if (str(r, "eventType").rfind("input.", 0) == 0) {
+            auto prior = input_origins.find(target);
+            input_origins.emplace(str(r, "id"),
+                                  prior == input_origins.end() ? target : prior->second);
+        }
+    }
     std::vector<Message> out;
     std::map<std::string, std::vector<std::size_t>> runs;
     for (const auto &r : h.rows) {
@@ -536,6 +548,8 @@ std::vector<Message> present(const History &h) {
         Message m{id, "", "", false};
         if (type.rfind("input.", 0) == 0) {
             m.role = "user";
+            if (auto origin = input_origins.find(id); origin != input_origins.end())
+                m.id = origin->second;
             auto doc = p.value("userMessage", Json::object());
             bool unsupported = false;
             if (doc.is_object() && doc.contains("parts") && doc["parts"].is_array())

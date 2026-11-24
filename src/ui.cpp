@@ -30,6 +30,8 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
     lv_obj_set_size(root_, 320, 170);
     const char *paths[] = {"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"};
+    const char *bold_paths[] = {"/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+                                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"};
     for (const auto *path : paths)
         if (std::filesystem::exists(path)) {
             font_ = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 13,
@@ -37,6 +39,27 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
             if (font_) {
                 detail_font_ = lv_freetype_font_create(path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP,
                                                        11, LV_FREETYPE_FONT_STYLE_NORMAL);
+                for (const auto *bold_path : bold_paths) {
+                    if (!std::filesystem::exists(bold_path))
+                        continue;
+                    markdown_fonts_.bold =
+                        lv_freetype_font_create(bold_path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 13,
+                                                LV_FREETYPE_FONT_STYLE_NORMAL);
+                    markdown_fonts_.heading =
+                        lv_freetype_font_create(bold_path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 16,
+                                                LV_FREETYPE_FONT_STYLE_NORMAL);
+                    break;
+                }
+                markdown_fonts_.italic = lv_freetype_font_create(
+                    path, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 13, LV_FREETYPE_FONT_STYLE_ITALIC);
+                const char *mono = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
+                if (std::filesystem::exists(mono)) {
+                    markdown_fonts_.code =
+                        lv_freetype_font_create(mono, LV_FREETYPE_FONT_RENDER_MODE_BITMAP, 12,
+                                                LV_FREETYPE_FONT_STYLE_NORMAL);
+                    if (markdown_fonts_.code)
+                        markdown_fonts_.code->fallback = font_;
+                }
                 break;
             }
         }
@@ -59,7 +82,13 @@ UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
     lv_obj_set_style_bg_opa(footer_, LV_OPA_COVER, 0);
 }
 UI::~UI() {
+    if (volume_overlay_)
+        lv_obj_delete(volume_overlay_);
     lv_obj_clean(root_);
+    for (auto *face : {markdown_fonts_.code, markdown_fonts_.heading, markdown_fonts_.italic,
+                       markdown_fonts_.bold})
+        if (face)
+            lv_freetype_font_delete(face);
     if (detail_font_)
         lv_freetype_font_delete(detail_font_);
     if (font_)
@@ -126,20 +155,24 @@ void UI::reset_account() {
     verification_uri.clear();
     selected = 0;
     acknowledged_messages_.clear();
-    history_scroll_ = 0;
+    navigation_ = {};
     busy = recording = uncertain = submitting = voice_pending = voice_working = false;
 }
 void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
-                       const std::string &event_id) {
+                       const std::string &event_id, const std::string &voice_file_id) {
     if (current.id == thread_id) {
         uncertain = was_uncertain;
-        if (!was_uncertain && !event_id.empty()) {
+        if (!was_uncertain && !event_id.empty() &&
+            std::none_of(messages.begin(), messages.end(),
+                         [&](const Message &m) { return m.id == event_id; })) {
             Message message{event_id, "user", text, false};
+            if (!voice_file_id.empty())
+                message.voice_clips.push_back(voice_file_id);
             acknowledged_messages_.push_back(message);
             if (acknowledged_messages_.size() > 30)
                 acknowledged_messages_.erase(acknowledged_messages_.begin());
             messages.push_back(std::move(message));
-            history_scroll_ = 0;
+            navigation_ = {};
         }
     }
     submitting = false;
@@ -163,7 +196,7 @@ void UI::select_thread(const Thread &thread) {
     current = thread;
     messages.clear();
     acknowledged_messages_.clear();
-    history_scroll_ = 0;
+    navigation_ = {};
     uncertain = false;
     page = Page::chat;
 }
@@ -208,9 +241,11 @@ Action UI::handle(const Input &input) {
             voice_working = true;
             return Action::voice;
         } else if (input.key == Key::up || input.key == Key::page_up)
-            history_scroll_ = std::min(history_scroll_ + 48, 100000);
+            navigation_.scroll(48);
         else if (input.key == Key::down || input.key == Key::page_down)
-            history_scroll_ = std::max(history_scroll_ - 48, 0);
+            navigation_.scroll(-48);
+        else if (!recording && (input.key == Key::left || input.key == Key::right))
+            navigation_.jump(input.key == Key::right);
         return Action::none;
     }
     if (input.key == Key::escape) {
@@ -253,6 +288,28 @@ void UI::update_recording_clock() {
     char duration[16];
     std::snprintf(duration, sizeof(duration), "%02ld:%02ld", elapsed / 60, elapsed % 60);
     lv_label_set_text(recording_clock_, duration);
+}
+void UI::show_volume(VolumeStatus volume) {
+    if (volume_overlay_)
+        lv_obj_delete(volume_overlay_);
+    auto *top = lv_display_get_layer_top(lv_obj_get_display(root_));
+    volume_overlay_ = shape(top, 118, 2, 131, 21, 5, ink);
+    bool quiet = volume.muted || volume.percent == 0;
+    const char *symbol = quiet ? LV_SYMBOL_MUTE : LV_SYMBOL_VOLUME_MAX;
+    auto *icon = label(volume_overlay_, symbol, 6, 4, 17, paper, 16);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_12, 0);
+    std::string caption = volume.percent < 0 ? "Audio unavailable"
+                                             : (volume.muted ? "Muted  " : "Volume  ") +
+                                                   std::to_string(volume.percent) + "%";
+    auto *text = label(volume_overlay_, caption, 24, 2, 104, paper, 18);
+    lv_obj_set_style_text_font(text, detail_font_ ? detail_font_ : &lv_font_montserrat_12, 0);
+    volume_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+}
+void UI::dismiss_expired_volume() {
+    if (volume_overlay_ && std::chrono::steady_clock::now() >= volume_until_) {
+        lv_obj_delete(volume_overlay_);
+        volume_overlay_ = nullptr;
+    }
 }
 void UI::render_recording() {
     if (recording_overlay_)
@@ -387,17 +444,23 @@ void UI::render() {
         lv_obj_set_scroll_dir(history, LV_DIR_VER);
         lv_obj_set_scrollbar_mode(history, LV_SCROLLBAR_MODE_OFF);
         int y = 0;
+        std::vector<MessageBounds> rows;
         std::vector<std::pair<std::size_t, lv_obj_t *>> voice_labels;
         std::size_t start = messages.size() > 30 ? messages.size() - 30 : 0;
         for (std::size_t i = start; i < messages.size(); ++i) {
             const auto &message = messages[i];
-            label(history, message.role == "user" ? "You" : "Okou", 3, y, 299, muted, 17);
+            const int top = y;
+            const bool focused = !message.id.empty() && navigation_.selected() == message.id;
+            label(history, message.role == "user" ? "You" : "Okou", 3, y, 299,
+                  focused ? green : muted, 17);
             y += 18;
-            auto *text = label(history, message.text, 3, y, 299, ink);
+            auto *text = markdown_body(history, message.text, 3, y, 299, markdown_fonts_);
             if (!message.voice_clips.empty())
                 voice_labels.emplace_back(i, text);
             lv_obj_update_layout(text);
-            y += lv_obj_get_height(text) + 8;
+            y += lv_obj_get_height(text);
+            rows.push_back({message.id, top, y});
+            y += 8;
         }
         if (messages.empty()) {
             const auto empty_chat = current.id.empty() ? status
@@ -406,7 +469,8 @@ void UI::render() {
             label(history, empty_chat, 3, 8, 299, muted);
         }
         lv_obj_update_layout(history);
-        lv_obj_scroll_to_y(history, std::max(y - 122 - history_scroll_, 0), LV_ANIM_OFF);
+        navigation_.layout(std::move(rows), lv_obj_get_height(history));
+        lv_obj_scroll_to_y(history, navigation_.offset(), LV_ANIM_OFF);
         lv_area_t viewport{};
         lv_obj_get_coords(history, &viewport);
         for (const auto &[index, text] : voice_labels) {
@@ -453,7 +517,8 @@ void UI::demo(const std::string &screen) {
         demo_thread.title = "Cardputer Zero";
         select_thread(demo_thread);
         messages = {{"event_1", "user", "帮我整理今天要做的事", false},
-                    {"event_2", "assistant", "当然。我们先从最重要的一件事开始。", true}};
+                    {"event_2", "assistant",
+                     "## 今日安排\n\n1. **确认时间**，再回复团队。\n2. 查看 `README.md`。", true}};
         if (screen == "recording") {
             recording = true;
             recording_started = std::chrono::steady_clock::now();

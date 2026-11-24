@@ -3,6 +3,7 @@
 #include "okou/diagnostics.hpp"
 #include "okou/ui.hpp"
 #include "update_process.hpp"
+#include "volume_control.hpp"
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -12,6 +13,7 @@
 #include <iostream>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 
 namespace okou {
 namespace {
@@ -467,11 +469,11 @@ class Engine {
                     result = voice_file_id_.empty() ? SendResult{"", true}
                                                     : s->client->send_voice(thread, voice_file_id_);
                 }
-                voice_file_id_.clear();
                 voice_pcm_ = std::vector<std::int16_t>();
-                emit([id = thread_id, result = std::move(result)](UI &ui) {
+                emit([id = thread_id, result = std::move(result),
+                      file_id = std::exchange(voice_file_id_, {})](UI &ui) {
                     ui.complete_send(id, "[Voice message]", result.uncertain,
-                                     result.client_event_id);
+                                     result.client_event_id, file_id);
                     ui.busy = false;
                     ui.status =
                         result.uncertain ? "Send uncertain; do not resend" : "Message accepted";
@@ -612,11 +614,14 @@ int main(int argc, char **argv) {
             check(ui.handle({Key::text, "中文 input!", false, false}) == Action::none);
             check(ui.draft.empty());
             check(ui.handle({Key::enter, {}, false, false}) == Action::none);
-            ui.complete_send(ui.current.id, "spoken message", false, "voice_event");
+            ui.complete_send(ui.current.id, "spoken message", false, "voice_event", "new-clip");
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"new-clip"});
             check(ui.messages.back().id == "voice_event");
             ui.update_history({});
             check(ui.messages.size() == 1);
             ui.update_history({{"voice_event", "user", "spoken message", false}});
+            ui.complete_send(ui.current.id, "spoken message", false, "voice_event");
             check(ui.messages.size() == 1);
             ui.update_history({});
             check(ui.messages.empty());
@@ -633,6 +638,14 @@ int main(int argc, char **argv) {
             check(ui.handle({Key::space, " "}) == Action::playback);
             ui.handle({Key::up, {}});
             ui.handle({Key::up, {}});
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
+            for (int i = 0; i < 8; ++i)
+                ui.handle({Key::right, {}});
+            ui.render();
+            check(ui.visible_voice_clips == std::vector<std::string>{"current-clip"});
+            for (int i = 0; i < 8; ++i)
+                ui.handle({Key::left, {}});
             ui.render();
             check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
             ui.handle({Key::escape, {}, false, false});
@@ -658,7 +671,11 @@ int main(int argc, char **argv) {
         auto start = last;
         auto next_battery_read = last;
         bool dirty = true, running = true, restart = false;
+        // On the LCD the previous frame is the launcher wallpaper. Keep it on
+        // glass until initialization produces chat, login, setup, or an error.
+        bool awaiting_first_screen = !OKOU_ZERO_DESKTOP && !demo;
         UpdateProcess updater;
+        VolumeControl volume;
         constexpr auto enter_hold_delay = std::chrono::milliseconds(350);
         std::chrono::steady_clock::time_point enter_pressed{};
         std::string enter_thread;
@@ -704,9 +721,24 @@ int main(int argc, char **argv) {
                     throw;
                 running = false; // Finish the confirmed install before leaving.
             }
+            if (awaiting_first_screen && ui.busy) {
+                for (const auto &input : inputs) {
+                    if (input.key == Key::quit || input.key == Key::escape)
+                        running = false;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            awaiting_first_screen = false;
             for (auto input : inputs) {
                 if (updater.installing())
                     continue;
+                if (input.key == Key::volume_up || input.key == Key::volume_down ||
+                    input.key == Key::mute) {
+                    if (!demo)
+                        volume.press(input.key);
+                    continue;
+                }
                 if (input.key == Key::escape)
                     enter_thread.clear();
                 if (input.key == Key::enter_cancel) {
@@ -812,6 +844,9 @@ int main(int argc, char **argv) {
                 ui.render();
                 dirty = false;
             }
+            if (auto current_volume = volume.poll())
+                ui.show_volume(*current_volume);
+            ui.dismiss_expired_volume();
             ui.update_recording_clock();
             lv_timer_handler();
             display.present();

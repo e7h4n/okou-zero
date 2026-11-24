@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "okou/core.hpp"
+#include "playback_gain.hpp"
 #include <algorithm>
 #include <alsa/asoundlib.h>
 #include <array>
@@ -75,6 +76,22 @@ void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic
         std::ftell(file) != static_cast<long>(header.size() + bytes))
         throw std::runtime_error("Invalid recording length");
 
+    if (std::fseek(file, static_cast<long>(header.size()), SEEK_SET) != 0)
+        throw std::runtime_error("Could not read recording");
+    int peak = 0;
+    std::array<std::uint8_t, 8192> samples{};
+    for (std::size_t remaining = bytes / 2; remaining;) {
+        if (stop)
+            return;
+        const auto frames = std::min(remaining, samples.size() / 2);
+        if (std::fread(samples.data(), 2, frames, file) != frames)
+            throw std::runtime_error("Could not read recording");
+        peak = std::max(peak, detail::pcm_peak(samples.data(), frames));
+        if (peak >= detail::playback_target_peak)
+            break;
+        remaining -= frames;
+    }
+    const float gain = detail::playback_gain(peak);
     constexpr unsigned rate = 16000;
     const pa_sample_spec format{PA_SAMPLE_S16LE, rate, 1};
     constexpr auto automatic = std::numeric_limits<std::uint32_t>::max();
@@ -114,6 +131,7 @@ void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic
         if (std::fseek(file, static_cast<long>(header.size() + 2 * written), SEEK_SET) != 0 ||
             std::fread(buffer.data(), 2, frames, file) != frames)
             throw std::runtime_error("Could not read recording");
+        detail::apply_playback_gain(buffer.data(), frames, gain);
         if (pa_simple_write(audio.get(), buffer.data(), frames * 2, nullptr) < 0)
             throw std::runtime_error("Audio playback failed");
         written += frames;
@@ -140,11 +158,8 @@ struct AudioCapture::Impl {
                                              max_samples - samples.size()});
                 try {
                     for (std::size_t i = 0; i < count; ++i) {
-                        const auto u = static_cast<unsigned>(buffer[2 * i]) |
-                                       (static_cast<unsigned>(buffer[2 * i + 1]) << 8);
-                        const auto signed_value =
-                            u < 32768U ? static_cast<int>(u) : static_cast<int>(u) - 65536;
-                        samples.push_back(static_cast<std::int16_t>(signed_value));
+                        samples.push_back(
+                            static_cast<std::int16_t>(detail::pcm16le(buffer.data() + 2 * i)));
                     }
                 } catch (...) {
                     failed = true;

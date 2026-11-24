@@ -695,16 +695,23 @@ void voice_history_test() {
                               {{"type", "source"}, {"hidden", "source metadata"}},
                               {{"type", "additional_info"}, {"text", "hidden context"}},
                               {{"type", "model"}, {"selectedModel", "hidden model"}}});
-    auto rows = Json::array({row(1, "input.prompt", {{"userMessage", {{"parts", parts}}}})});
+    const Json payload = {{"userMessage", {{"parts", parts}}}};
+    auto queued = row(1, "input.prompt", payload);
+    queued["runId"] = nullptr;
+    auto promoted = row(2, "input.prompt", payload);
+    promoted["revokesEventId"] = id(1);
+    // An independent send of the same clip remains a separate user message.
+    auto rows = Json::array({queued, promoted, row(3, "input.prompt", payload)});
     const auto url = f.server.origin() + "/storage/voice?signature=private";
-    f.server.start({missing_snapshot(), get(rows_path(0), tail(rows, 1, id(1))),
-                    get(rows_path(1, id(1)), tail(Json::array(), 1, id(1))),
+    f.server.start({missing_snapshot(), get(rows_path(0), tail(rows, 3, id(3))),
+                    get(rows_path(3, id(3)), tail(Json::array(), 3, id(3))),
                     get("/api/voice/clips/" + clip + "/playback", {{"url", url}})});
     auto client = f.client();
     auto messages = client.history(thread_id);
-    check(messages.size() == 1 && messages.front().text == "[Voice message]" &&
-              messages.front().voice_clips == std::vector<std::string>{clip},
-          "Voice history retains only the label and playable clip IDs");
+    check(messages.size() == 2 && messages[0].id == id(1) && messages[1].id == id(3) &&
+              messages[0].text == "[Voice message]" &&
+              messages[0].voice_clips == std::vector<std::string>{clip},
+          "Promoted voice replaces its placeholder and retains playback and the original send ID");
     check(client.voice_playback_url(clip) == url, "Preserves the signed playback URL");
     f.server.finish();
 }

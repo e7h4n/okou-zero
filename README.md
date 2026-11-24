@@ -115,6 +115,7 @@ replaced. Public CI tests mock updater network calls and never install a real up
 | --- | --- |
 | Up / down, Enter | Navigate settings or scroll conversation history |
 | Hold Enter in chat | Record while held, then release to send a voice message |
+| Volume up / down, Mute | Adjust system output by 10%, or toggle mute. The screen briefly shows the resulting level. |
 | Space in chat | Play the first visible Zero voice message, pause, or resume |
 | Ctrl+R | Retry a retained recording or failed voice message |
 | Esc while recording/recovering | Discard recording and retained voice work |

@@ -49,6 +49,17 @@ int main() {
         events = keyboard.poll();
         check(events.size() == 2 && events[0].key == Key::enter_cancel &&
               events[1].key == Key::enter_down && events[1].shift);
+        emit(EV_KEY, KEY_VOLUMEUP, 1);
+        emit(EV_KEY, KEY_VOLUMEUP, 2);
+        emit(EV_KEY, KEY_VOLUMEUP, 0);
+        emit(EV_KEY, KEY_VOLUMEDOWN, 1);
+        emit(EV_KEY, KEY_MUTE, 1);
+        emit(EV_KEY, KEY_MUTE, 2);
+        emit(EV_KEY, KEY_MUTE, 0);
+        events = keyboard.poll();
+        check(events.size() == 4 && events[0].key == Key::volume_up &&
+              events[1].key == Key::volume_up && events[2].key == Key::volume_down &&
+              events[3].key == Key::mute);
         close(ports[0]);
         close(ports[1]);
         std::string text = "a中🙂";
