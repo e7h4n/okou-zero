@@ -3,6 +3,7 @@
 #include "okou/core.hpp"
 #include "okou/markdown.hpp"
 #include "okou/platform.hpp"
+#include "okou/recording_waveform.hpp"
 #include <chrono>
 #include <ctime>
 
@@ -30,6 +31,7 @@ class UI {
     std::string update_message, playback_status;
     std::vector<std::string> visible_voice_clips;
     BatteryStatus battery;
+    RecordingWaveform recording_waveform;
     bool busy = false, recording = false, uncertain = false;
     bool submitting = false, voice_pending = false, voice_working = false;
     std::chrono::steady_clock::time_point recording_started{};
@@ -76,6 +78,7 @@ class UI {
     int reading_line_ = 22;
     void render_voice_panel(bool capturing);
     void render_reader();
+    void render_delivery_panel(const char *title, const char *hint, bool animate);
     void render_header();
     lv_obj_t *label(lv_obj_t *parent, const std::string &text, int x, int y, int width,
                     std::uint32_t color, int height = 0);

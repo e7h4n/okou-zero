@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "../src/playback_gain.hpp"
 #include "okou/core.hpp"
+#include "okou/recording_waveform.hpp"
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -50,6 +52,30 @@ int main() {
     check(okou::detail::playback_gain(okou::detail::pcm_peak(expected.data(), 6)) == 1.0f &&
               okou::detail::playback_gain(0) == 1.0f,
           "Full-range PCM and silence stay unchanged");
+    okou::RecordingWaveform wave;
+    std::array<std::int16_t, 256> block{};
+    block.front() = -32768;
+    block.back() = 32767;
+    wave.append(block.data(), 1);
+    check(wave.snapshot().back().low == 0, "Incomplete wave column is held until ready");
+    wave.append(block.data() + 1, 255);
+    auto peaks = wave.snapshot();
+    check(peaks.back().low == -32768 && peaks.back().high == 32767,
+          "Both signed PCM extremes survive a split read");
+    block.fill(0);
+    for (std::size_t i = 1; i < peaks.size(); ++i)
+        wave.append(block.data(), block.size());
+    peaks = wave.snapshot();
+    check(peaks.front().low == -32768 && peaks.back().low == 0 && peaks.back().high == 0,
+          "Silence moves the previous peak across the display");
+    wave.append(block.data(), block.size());
+    check(wave.snapshot().front().high == 0, "Old PCM scrolls out of the bounded window");
+    block.front() = -200;
+    wave.append(block.data(), 1);
+    wave.clear();
+    block.front() = 0;
+    wave.append(block.data(), block.size());
+    check(wave.snapshot().back().low == 0, "A new capture discards the previous partial column");
     // No start() call: these lifecycle checks must never open a capture device.
     okou::AudioCapture audio("not-opened-by-tests");
     check(!audio.recording(), "Constructor never records");

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "okou/core.hpp"
+#include "okou/recording_waveform.hpp"
 #include "playback_gain.hpp"
 #include <algorithm>
 #include <alsa/asoundlib.h>
@@ -151,7 +152,7 @@ struct AudioCapture::Impl {
     std::vector<std::int16_t> samples;
     bool failed = false; // Worker writes; owner reads only after join.
 
-    void loop() noexcept {
+    void loop(RecordingWaveform *waveform) noexcept {
         // ALSA S16_LE describes device bytes; decode explicitly for big-endian hosts.
         std::array<unsigned char, 1024> buffer{};
         while (!stop.load() && samples.size() < max_samples) {
@@ -164,6 +165,8 @@ struct AudioCapture::Impl {
                         samples.push_back(
                             static_cast<std::int16_t>(detail::pcm16le(buffer.data() + 2 * i)));
                     }
+                    if (waveform)
+                        waveform->append(samples.data() + samples.size() - count, count);
                 } catch (...) {
                     failed = true;
                     break;
@@ -186,6 +189,8 @@ struct AudioCapture::Impl {
                 break;
             }
         }
+        if (waveform)
+            waveform->clear();
         active.store(false);
     }
     void join() noexcept {
@@ -204,7 +209,7 @@ AudioCapture::AudioCapture(std::string device) : impl_(std::make_unique<Impl>(st
 AudioCapture::~AudioCapture() {
     cancel();
 }
-void AudioCapture::start() {
+void AudioCapture::start(RecordingWaveform *waveform) {
     std::lock_guard<std::mutex> lock(impl_->lifecycle);
     if (impl_->worker.joinable())
         throw std::logic_error("Finish or cancel the previous recording first");
@@ -236,7 +241,9 @@ void AudioCapture::start() {
         require_alsa(snd_pcm_hw_params(impl_->handle, raw));
         require_alsa(snd_pcm_prepare(impl_->handle));
         impl_->active.store(true);
-        impl_->worker = std::thread([p = impl_.get()] { p->loop(); });
+        if (waveform)
+            waveform->clear();
+        impl_->worker = std::thread([p = impl_.get(), waveform] { p->loop(waveform); });
     } catch (...) {
         impl_->join();
         throw;
