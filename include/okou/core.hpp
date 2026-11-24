@@ -113,6 +113,7 @@ struct Message {
     std::string id, role, text;
     bool terminal = false;
     std::vector<std::string> voice_clips{};
+    std::string local_sent_at{};
 };
 struct ListState {
     std::vector<Thread> threads;

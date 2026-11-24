@@ -349,6 +349,13 @@ void history_test() {
          b = row(2, "output.message", {{"content", "revoked text"}}),
          c = row(3, "output.message", {{"content", "Visible answer"}}),
          d = row(4, "control.revoke");
+    c["createdAt"] = "2026-11-24T01:12:34.567Z";
+    auto summer = row(6, "output.message", {{"content", "Summer reply"}});
+    summer["createdAt"] = "2026-07-01T10:07:15+02:00";
+    auto legacy = row(7, "output.message", {{"content", "Legacy reply"}});
+    legacy.erase("createdAt");
+    auto invalid_date = row(8, "output.message", {{"content", "Undated reply"}});
+    invalid_date["createdAt"] = "2026-02-30T00:00:00Z";
     d["revokesEventId"] = id(2);
     auto end = row(5, "run.completed");
     f.server.start({get(base() + "/event-snapshot",
@@ -360,13 +367,30 @@ void history_test() {
                         return Response{200, a.dump() + "\n" + b.dump() + "\n" + c.dump() + "\n",
                                         false};
                     },
-                    get(rows_path(3, id(3)), tail(Json::array({d, end}), 5, id(5))),
-                    get(rows_path(5, id(5)), tail(Json::array(), 5, id(5)))});
+                    get(rows_path(3, id(3)),
+                        tail(Json::array({d, end, summer, legacy, invalid_date}), 8, id(8))),
+                    get(rows_path(8, id(8)), tail(Json::array(), 8, id(8)))});
+    const char *zone = getenv("TZ");
+    const std::string original_zone = zone ? zone : "";
+    const bool had_zone = zone != nullptr;
+    setenv("TZ", "America/Los_Angeles", 1);
+    tzset();
     auto messages = f.client().history(thread_id);
-    check(messages.size() == 2, "Revoked and successful completion rows hidden");
+    if (had_zone)
+        setenv("TZ", original_zone.c_str(), 1);
+    else
+        unsetenv("TZ");
+    tzset();
+    check(messages.size() == 5, "Revoked and successful completion rows hidden");
     check(messages[0].role == "user" && messages[0].text == "Hello", "user presentation");
     check(messages[1].text == "Visible answer" && messages[1].terminal,
           "assistant terminal evidence");
+    check(messages[0].local_sent_at.empty() && messages[1].local_sent_at == "2026-11-23 17:12",
+          "archive timestamp in Pacific standard time");
+    check(messages[2].local_sent_at == "2026-07-01 01:07",
+          "tail timestamp with offset in Pacific daylight time");
+    check(messages[3].local_sent_at.empty() && messages[4].local_sent_at.empty(),
+          "missing and invalid timestamps preserve replies");
     f.server.finish();
 }
 template <class Fn> void throws(Fn fn, const std::string &what) {

@@ -4,11 +4,13 @@
 #include "okou/core.hpp"
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <regex>
 #include <set>
 #include <sqlite3.h>
 #include <sstream>
@@ -130,6 +132,35 @@ bool is_uuid(const std::string &s) {
     }
     return true;
 }
+// Convert the event instant, including its UTC offset, using the device's zone rules.
+std::string local_sent_time(const std::string &stamp) {
+    static const std::regex iso(
+        R"(^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.[0-9]+)?(Z|([+-])([0-9]{2}):([0-9]{2}))$)");
+    std::smatch fields;
+    if (stamp.size() < 20 || stamp.size() > 40 || !std::regex_match(stamp, fields, iso))
+        return {};
+    std::tm utc{};
+    const std::string civil = fields[1].str();
+    const char *end = strptime(civil.c_str(), "%Y-%m-%dT%H:%M:%S", &utc);
+    if (!end || *end)
+        return {};
+    const int day = utc.tm_mday;
+    auto instant = timegm(&utc);
+    if (utc.tm_mday != day)
+        return {};
+    if (fields[3].matched) {
+        const int hours = std::stoi(fields[4].str()), minutes = std::stoi(fields[5].str());
+        if (hours > 23 || minutes > 59)
+            return {};
+        instant -= (fields[3] == "+" ? 1 : -1) * (hours * 3600 + minutes * 60);
+    }
+    std::tm local{};
+    char text[24]{};
+    if (!localtime_r(&instant, &local) ||
+        !std::strftime(text, sizeof(text), "%Y-%m-%d %H:%M", &local))
+        return {};
+    return text;
+}
 Json visible_row(const Json &row) {
     Json safe = Json::object();
     for (const char *k : {"id", "chatThreadId", "seqId", "eventType", "runId", "revokesEventId"})
@@ -142,6 +173,10 @@ Json visible_row(const Json &row) {
     Json payload = Json::object();
     if (type == "output.message") {
         payload["content"] = assistant_text(str(p, "content"));
+        const auto stamp = row.find("createdAt");
+        if (stamp != row.end() && stamp->is_string() &&
+            stamp->get_ref<const std::string &>().size() <= 40)
+            safe["createdAt"] = *stamp;
     }
     if (type.rfind("input.", 0) == 0 && p.contains("userMessage") && p["userMessage"].is_object()) {
         auto doc = p["userMessage"];
@@ -569,6 +604,7 @@ std::vector<Message> present(const History &h) {
                                          : "\n[Attachment or action: review in Okou Web]";
         } else if (type == "output.message") {
             m.role = "assistant";
+            m.local_sent_at = local_sent_time(str(r, "createdAt"));
             m.text = str(p, "content");
         } else if (type == "output.error") {
             m.role = "system";
