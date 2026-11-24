@@ -537,16 +537,23 @@ void UI::render_reader() {
         turn_direction_ = 0;
     }
     if (pos >= 0) {
-        auto *clip = shape(sheet, 12, 7, text_width, 104, 0, face);
+        const auto &reply = messages[replies[pos]];
+        const bool dated = !reply.local_sent_at.empty();
+        if (dated) {
+            auto *stamp = label(sheet, reply.local_sent_at, 12, 2, text_width, muted, 16);
+            lv_obj_set_style_text_font(stamp, &lv_font_montserrat_12, 0);
+        }
+        const int body_top = dated ? 21 : 7;
+        auto *clip = shape(sheet, 12, body_top, text_width, 111 - body_top, 0, face);
         std::string title;
-        auto *content = markdown_body(clip, messages[replies[pos]].text, 0, 0, text_width,
-                                      markdown_fonts_, &title);
+        auto *content = markdown_body(clip, reply.text, 0, 0, text_width, markdown_fonts_, &title);
         if (!title.empty()) {
-            auto *heading = label(sheet, title, 12, 4, text_width, ink, 34);
+            auto *heading = label(sheet, title, 12, dated ? 15 : 4, text_width, ink, 34);
             if (markdown_fonts_.heading)
                 lv_obj_set_style_text_font(heading, markdown_fonts_.heading, 0);
-            lv_obj_set_y(clip, 39);
-            lv_obj_set_height(clip, reading_line_ * 3);
+            const int top = dated ? 44 : 39;
+            lv_obj_set_y(clip, top);
+            lv_obj_set_height(clip, std::min(reading_line_ * 3, 114 - top));
         }
         lv_obj_update_layout(content);
         navigation_.measure(lv_obj_get_height(content), lv_obj_get_height(clip));
@@ -704,9 +711,12 @@ void UI::demo(const std::string &screen) {
         select_thread(demo_thread);
         messages = {
             {"event_1", "user", "Help me plan my day", false},
-            {"event_2", "assistant",
+            {"event_2",
+             "assistant",
              "## Today’s plan\n\n1. **Confirm the time** with the team.\n2. Read `README.md`.",
-             true}};
+             true,
+             {},
+             "2026-11-24 10:42"}};
         if (screen == "waiting")
             messages.push_back({"waiting", "user", "See you later", false});
         if (screen == "sending")
@@ -726,12 +736,15 @@ void UI::demo(const std::string &screen) {
                 {"a4", "assistant", "## Next stop\n\nFollow the path east.", false},
                 {"a5", "assistant", "## Meet at dusk\n\nWait at the station.", false},
                 {"u4", "user", "Packing list", false},
-                {"a6", "assistant",
+                {"a6",
+                 "assistant",
                  "## "
                  "Trip checklist\n\nPack water and a jacket.\nSave an offline map.\nCheck the "
                  "camera battery.\nConfirm your train ticket.\nMessage your team.\nPick up your "
                  "keys.",
-                 false}};
+                 false,
+                 {},
+                 "2026-11-24 11:08"}};
         }
         if (screen == "playback" || screen == "paused")
             playback_status =
