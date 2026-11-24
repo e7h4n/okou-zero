@@ -34,6 +34,63 @@ void draw_segment(lv_event_t *event, const lv_area_t &origin, int x1, int y1, in
     d.color = lv_color_hex(color);
     lv_draw_line(lv_event_get_layer(event), &d);
 }
+// A tesseract has 16 sign combinations; edges differ in exactly one coordinate.
+void draw_tesseract(lv_event_t *event) {
+    lv_area_t bounds;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    constexpr unsigned period_ms = 9600;
+    const double angle = 6.283185307179586 * (lv_tick_get() % period_ms) / period_ms;
+    const double cw = std::cos(angle), sw = std::sin(angle);
+    const double cy = std::cos(angle + 0.42), sy = std::sin(angle + 0.42);
+    struct Vertex {
+        int x, y;
+        double depth;
+    };
+    Vertex vertices[16];
+    for (int i = 0; i < 16; ++i) {
+        const int x = (i & 1) ? 1 : -1, y = (i & 2) ? 1 : -1, z = (i & 4) ? 1 : -1,
+                  w = (i & 8) ? 1 : -1;
+        // Rotate in the XW and YZ planes, then tilt the 3D projection toward the viewer.
+        const double rx = cw * x - sw * w, rw = sw * x + cw * w;
+        const double ry = cy * y - sy * z, rz = sy * y + cy * z;
+        const double scale4 = 3.8 / (3.8 - rw);
+        const double vx = 0.92 * rx + 0.39 * rz, vz = -0.39 * rx + 0.92 * rz;
+        const double vy = 0.96 * ry - 0.28 * vz, depth = scale4 * (0.28 * ry + 0.96 * vz);
+        const double scale = 19.0 * scale4 * 6.0 / (6.0 - depth);
+        vertices[i] = {lv_area_get_width(&bounds) / 2 + static_cast<int>(std::lround(vx * scale)),
+                       lv_area_get_height(&bounds) / 2 + static_cast<int>(std::lround(vy * scale)),
+                       depth};
+    }
+    // Draw distant edges first so near edges remain legible at crossings.
+    for (int layer = 0; layer < 3; ++layer) {
+        for (int i = 0; i < 16; ++i) {
+            for (int axis : {1, 2, 4, 8}) {
+                if (i & axis)
+                    continue;
+                const auto &a = vertices[i], &b = vertices[i | axis];
+                const double depth = (a.depth + b.depth) * 0.5;
+                const int edge_layer = depth < -0.35 ? 0 : depth < 0.45 ? 1 : 2;
+                if (edge_layer == layer)
+                    draw_segment(event, bounds, a.x, a.y, b.x, b.y,
+                                 layer == 0   ? border
+                                 : layer == 1 ? muted
+                                              : green);
+            }
+        }
+    }
+}
+
+void animate_redraw(lv_obj_t *object, int frames_per_second) {
+    lv_anim_t anim;
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, object);
+    lv_anim_set_exec_cb(
+        &anim, [](void *obj, int32_t) { lv_obj_invalidate(static_cast<lv_obj_t *>(obj)); });
+    lv_anim_set_values(&anim, 0, frames_per_second);
+    lv_anim_set_duration(&anim, 1000);
+    lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&anim);
+}
 lv_obj_t *folded_sheet(lv_obj_t *parent, int x, int y, int width, int height) {
     auto *sheet = shape(parent, x, y, width, height, 0, face);
     lv_obj_add_event_cb(
@@ -422,17 +479,8 @@ void UI::render_voice_panel(bool capturing) {
             }
         },
         LV_EVENT_DRAW_MAIN, this);
-    if (!paused) {
-        lv_anim_t anim;
-        lv_anim_init(&anim);
-        lv_anim_set_var(&anim, wave);
-        lv_anim_set_exec_cb(
-            &anim, [](void *o, int32_t) { lv_obj_invalidate(static_cast<lv_obj_t *>(o)); });
-        lv_anim_set_values(&anim, 0, 16);
-        lv_anim_set_duration(&anim, 1000);
-        lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
-        lv_anim_start(&anim);
-    }
+    if (!paused)
+        animate_redraw(wave, 16);
     label(recording_overlay_,
           capturing ? "Release Enter to send"
           : paused  ? "Space to resume"
@@ -666,10 +714,17 @@ void UI::render() {
                            : retained ? "Ctrl+R to retry   Esc to discard"
                            : offline  ? "Ctrl+L to reconnect   Esc for chat"
                                       : "Voice message";
-        auto *heading = label(panel, title, 16, 14, 265, ink, 37);
+        const bool sending = !uncertain && !retained && !offline;
+        if (sending) {
+            auto *model = shape(panel, 8, 4, 125, 100, 0, face);
+            lv_obj_add_event_cb(model, draw_tesseract, LV_EVENT_DRAW_MAIN, nullptr);
+            animate_redraw(model, 24);
+        }
+        const int text_x = sending ? 145 : 16;
+        auto *heading = label(panel, title, text_x, sending ? 21 : 14, 281 - text_x, ink, 37);
         if (markdown_fonts_.heading)
             lv_obj_set_style_text_font(heading, markdown_fonts_.heading, 0);
-        label(panel, hint, 16, 61, 265, green, 36);
+        label(panel, hint, text_x, sending ? 57 : 61, 281 - text_x, green, 36);
         return;
     } else {
         render_reader();
