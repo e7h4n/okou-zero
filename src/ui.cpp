@@ -515,11 +515,15 @@ void UI::render_reader() {
         return;
     }
 
+    constexpr int sheet_x = 7, sheet_width = 272;
+    constexpr int sheet_right = sheet_x + sheet_width;
+    constexpr int text_width = sheet_width - 22;
+    constexpr int rail_x = sheet_right + 12;
     for (int i = 0; i < 2; ++i) {
-        shape(body_, 20 + 5 * i, 10 - 4 * i, 235, 1, 0, border);
-        shape(body_, 254 + 5 * i, 10 - 4 * i, 1, 99, 0, border);
+        shape(body_, 20 + 5 * i, 10 - 4 * i, sheet_right - 20, 1, 0, border);
+        shape(body_, sheet_right - 1 + 5 * i, 10 - 4 * i, 1, 99, 0, border);
     }
-    auto *sheet = folded_sheet(body_, 7, 14, 248, 118);
+    auto *sheet = folded_sheet(body_, sheet_x, 14, sheet_width, 118);
     if (turn_direction_) {
         lv_anim_t turn;
         lv_anim_init(&turn);
@@ -533,12 +537,12 @@ void UI::render_reader() {
         turn_direction_ = 0;
     }
     if (pos >= 0) {
-        auto *clip = shape(sheet, 12, 7, 226, 104, 0, face);
+        auto *clip = shape(sheet, 12, 7, text_width, 104, 0, face);
         std::string title;
-        auto *content =
-            markdown_body(clip, messages[replies[pos]].text, 0, 0, 226, markdown_fonts_, &title);
+        auto *content = markdown_body(clip, messages[replies[pos]].text, 0, 0, text_width,
+                                      markdown_fonts_, &title);
         if (!title.empty()) {
-            auto *heading = label(sheet, title, 12, 4, 226, ink, 34);
+            auto *heading = label(sheet, title, 12, 4, text_width, ink, 34);
             if (markdown_fonts_.heading)
                 lv_obj_set_style_text_font(heading, markdown_fonts_.heading, 0);
             lv_obj_set_y(clip, 39);
@@ -552,38 +556,42 @@ void UI::render_reader() {
                            : busy             ? "Loading conversation..."
                            : messages.empty() ? "Hold Enter to record"
                                               : "Waiting for reply";
-        label(sheet, empty, 13, 30, 224, ink);
+        label(sheet, empty, 13, 30, text_width, ink);
     }
     // For deep history, pin the newest reply at the bottom and keep the selection in view.
     const int start = std::max(0, std::min(pos - 1, count - 4));
     const int visible = std::min(4, count);
     const auto dots = [&](std::size_t n, int y) {
         for (std::size_t j = 0; j < std::min<std::size_t>(n, 6); ++j)
-            shape(body_, 279 + static_cast<int>(j) * 5, y, 3, 3, 2, gold);
+            shape(body_, rail_x + 3 + static_cast<int>(j) * 3, y, 2, 2, 0, gold);
         if (n > 6)
-            shape(body_, 309, y + 1, 5, 1, 0, gold);
+            shape(body_, rail_x + 22, y, 3, 1, 0, gold);
     };
     for (int j = 0; j < visible; ++j) {
         const int k = j == visible - 1 ? count - 1 : start + j;
-        const int y = 121 - (visible - 1 - j) * 30;
+        const int y = 121 - (visible - 1 - j) * 26;
         if (j) {
-            shape(body_, 280, y - 24, 1, 19, 0, border);
-            if (k != start + j) { // A break before the pinned newest reply.
-                shape(body_, 278, y - 19, 6, 1, 0, muted);
-                shape(body_, 278, y - 17, 6, 1, 0, muted);
+            if (k == start + j) {
+                shape(body_, rail_x, y - 21, 1, 17, 0, accent);
+            } else {
+                // A broken trace marks the jump to the pinned newest reply.
+                shape(body_, rail_x, y - 21, 1, 6, 0, accent);
+                shape(body_, rail_x, y - 11, 1, 7, 0, accent);
             }
         }
-        dots(replies[k] - (k ? replies[k - 1] + 1 : 0), y - 12);
+        dots(replies[k] - (k ? replies[k - 1] + 1 : 0), y - 13);
         if (k == pos) {
-            shape(body_, 272, y - 4, 18, 8, 0, green);
-            auto *distance =
-                label(body_, std::to_string(count - 1 - pos), 295, y - 8, 25, green, 17);
+            // A hollow reticle connects the selected reply directly to the sheet edge.
+            shape(body_, sheet_right, y, rail_x - sheet_right - 3, 1, 0, muted);
+            shape(body_, rail_x - 3, y - 3, 7, 7, 1, green);
+            shape(body_, rail_x - 2, y - 2, 5, 5, 0, paper);
+            shape(body_, rail_x, y, 1, 1, 0, green);
+            auto *distance = label(body_, std::to_string(count - 1 - pos), rail_x + 6, y - 8,
+                                   320 - rail_x - 6, green, 17);
             lv_obj_set_style_text_font(distance, &lv_font_montserrat_12, 0);
-            shape(body_, 255, 69, 8, 1, 0, muted);
-            shape(body_, 262, std::min(69, y), 1, std::max(1, std::abs(69 - y)), 0, muted);
-            shape(body_, 262, y, 10, 1, 0, muted);
-        } else
-            shape(body_, 275, y - 2, 12, 5, 0, border);
+        } else {
+            shape(body_, rail_x - 2, y, 5, 1, 0, muted);
+        }
     }
     dots(messages.size() - (replies.empty() ? 0 : replies.back() + 1), 133);
 }
