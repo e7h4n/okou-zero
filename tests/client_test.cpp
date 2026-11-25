@@ -599,11 +599,16 @@ void voice_message_test() {
         [&](const Request &r) {
             api_request(r, "POST", "/api/chat/events");
             auto body = Json::parse(r.body);
+            const auto &message = body.at("userMessage");
+            const auto &parts = message.at("parts");
             check(body.at("threadId") == thread_id && body.at("hasTextContent") == false &&
-                      body.at("prompt") == "(see message parts)" &&
-                      body.at("userMessage") ==
-                          Json({{"version", 1}, {"parts", Json::array({voice_part()})}}),
-                  "send a voice-only message to the fixed chat");
+                      body.at("prompt") == "(see message parts)" && message.at("version") == 1 &&
+                      parts.size() == 2 && parts.at(0) == voice_part(),
+                  "send the recording to the fixed chat");
+            check(parts.at(1).at("type") == "additional_info" &&
+                      parts.at(1).at("text").get<std::string>().find("Cardputer Zero") !=
+                          std::string::npos,
+                  "send the reader context as hidden message metadata");
             return json({{"threadId", thread_id}});
         },
     });

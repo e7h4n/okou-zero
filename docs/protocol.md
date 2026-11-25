@@ -40,7 +40,9 @@ sample peaks.
    complete the upload with `POST /api/uploads/complete`.
 3. Read the fixed thread's metadata to preserve its computer host and browser settings.
    Submit `POST /api/chat/events` with the thread ID, a version-1 user message
-   containing a voice part with `clips: [{fileId}]`, `hasTextContent: false` and
+   containing a voice part with `clips: [{fileId}]` and an `additional_info` part describing
+   the handheld reader's screen capacity, Markdown support and link limitations. Only the
+   voice part appears in the conversation. The request uses `hasTextContent: false` and
    the protocol prompt `(see message parts)`.
 
 Before submission the client durably reserves both event UUIDs in an account- and
