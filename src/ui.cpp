@@ -24,7 +24,7 @@ lv_obj_t *shape(lv_obj_t *parent, int x, int y, int width, int height, int radiu
     return object;
 }
 void draw_segment(lv_event_t *event, const lv_area_t &origin, int x1, int y1, int x2, int y2,
-                  uint32_t color) {
+                  uint32_t color, int width = 1) {
     lv_draw_line_dsc_t d;
     lv_draw_line_dsc_init(&d);
     d.p1.x = origin.x1 + x1;
@@ -32,7 +32,33 @@ void draw_segment(lv_event_t *event, const lv_area_t &origin, int x1, int y1, in
     d.p2.x = origin.x1 + x2;
     d.p2.y = origin.y1 + y2;
     d.color = lv_color_hex(color);
+    d.width = width;
     lv_draw_line(lv_event_get_layer(event), &d);
+}
+// Four fixed-width seven-segment digits share the right inset of the waveform.
+void draw_elapsed(lv_event_t *event, int seconds) {
+    lv_area_t area;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &area);
+    struct Segment {
+        int x1, y1, x2, y2;
+    };
+    constexpr Segment strokes[] = {{3, 2, 12, 2},   {14, 4, 14, 10}, {14, 14, 14, 20},
+                                   {3, 22, 12, 22}, {1, 14, 1, 20},  {1, 4, 1, 10},
+                                   {3, 12, 12, 12}};
+    constexpr unsigned masks[] = {0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f};
+    const int digits[] = {seconds / 600 % 10, seconds / 60 % 10, seconds % 60 / 10, seconds % 10};
+    constexpr int offsets[] = {0, 19, 48, 67};
+    for (int i = 0; i < 4; ++i) {
+        for (unsigned bit = 0; bit < std::size(strokes); ++bit) {
+            if (!(masks[digits[i]] & (1u << bit)))
+                continue;
+            const auto &stroke = strokes[bit];
+            draw_segment(event, area, offsets[i] + stroke.x1, stroke.y1, offsets[i] + stroke.x2,
+                         stroke.y2, ink, 2);
+        }
+    }
+    for (int y : {8, 16})
+        draw_segment(event, area, 40, y, 42, y, gold, 2);
 }
 // A tesseract has 16 sign combinations; edges differ in exactly one coordinate.
 void draw_tesseract(lv_event_t *event) {
@@ -56,7 +82,7 @@ void draw_tesseract(lv_event_t *event) {
         const double scale4 = 3.8 / (3.8 - rw);
         const double vx = 0.92 * rx + 0.39 * rz, vz = -0.39 * rx + 0.92 * rz;
         const double vy = 0.96 * ry - 0.28 * vz, depth = scale4 * (0.28 * ry + 0.96 * vz);
-        const double scale = 19.0 * scale4 * 6.0 / (6.0 - depth);
+        const double scale = 22.0 * scale4 * 6.0 / (6.0 - depth);
         vertices[i] = {lv_area_get_width(&bounds) / 2 + static_cast<int>(std::lround(vx * scale)),
                        lv_area_get_height(&bounds) / 2 + static_cast<int>(std::lround(vy * scale)),
                        depth};
@@ -407,9 +433,7 @@ void UI::update_recording_clock() {
     if (elapsed == recording_seconds_)
         return;
     recording_seconds_ = elapsed;
-    char duration[16];
-    std::snprintf(duration, sizeof(duration), "%02ld:%02ld", elapsed / 60, elapsed % 60);
-    lv_label_set_text(recording_clock_, duration);
+    lv_obj_invalidate(recording_clock_);
 }
 void UI::show_volume(VolumeStatus volume) {
     if (volume_overlay_)
@@ -437,26 +461,34 @@ void UI::render_voice_panel(bool capturing) {
     if (recording_overlay_)
         return;
     recording_overlay_ = shape(root_, 0, 22, 320, 148, 0, paper);
-    const auto color = capturing ? gold : green;
     const bool paused = !capturing && playback_status.rfind("Paused", 0) == 0;
-    auto *title = label(recording_overlay_,
-                        capturing ? "Recording"
-                        : paused  ? "Paused"
-                                  : "Voice playback",
-                        14, 4, 165, color, 30);
-    if (markdown_fonts_.heading)
-        lv_obj_set_style_text_font(title, markdown_fonts_.heading, 0);
     if (capturing) {
-        recording_clock_ = label(recording_overlay_, "00:00", 224, 8, 80, ink, 24);
-        lv_obj_set_style_text_font(recording_clock_, &lv_font_montserrat_16, 0);
+        render_voice_state(recording_overlay_, "REC", gold);
+        recording_clock_ = shape(recording_overlay_, 219, 10, 84, 25, 0, paper);
+        lv_obj_add_event_cb(
+            recording_clock_,
+            [](lv_event_t *e) {
+                const auto *ui = static_cast<UI *>(lv_event_get_user_data(e));
+                draw_elapsed(e, static_cast<int>(ui->recording_seconds_));
+            },
+            LV_EVENT_DRAW_MAIN, this);
         recording_seconds_ = -1;
         update_recording_clock();
+        // The scale marks the time window of the rolling sample history.
+        for (int i = 0; i <= 12; ++i) {
+            const int height = i % 3 == 0 ? 5 : 2;
+            shape(recording_overlay_, 18 + i * 282 / 12, 132 - height, 1, height, 0, border);
+        }
     } else {
+        auto *title =
+            label(recording_overlay_, paused ? "Paused" : "Voice playback", 14, 4, 165, green, 30);
+        if (markdown_fonts_.heading)
+            lv_obj_set_style_text_font(title, markdown_fonts_.heading, 0);
         playback_clock_ = label(recording_overlay_, "00:00", 224, 8, 80, green, 24);
         lv_obj_set_style_text_font(playback_clock_, &lv_font_montserrat_16, 0);
         playback_seconds_ = -1;
     }
-    auto *wave = shape(recording_overlay_, 18, 37, 284, 72, 0, paper);
+    auto *wave = shape(recording_overlay_, 18, capturing ? 48 : 37, 284, 72, 0, paper);
     lv_obj_add_event_cb(
         wave,
         [](lv_event_t *e) {
@@ -503,11 +535,9 @@ void UI::render_voice_panel(bool capturing) {
         LV_EVENT_DRAW_MAIN, this);
     if (!paused)
         animate_redraw(wave, 16);
-    label(recording_overlay_,
-          capturing ? "Release Enter to send"
-          : paused  ? "Space to resume"
-                    : "Space to pause",
-          14, 115, 285, ink, 26);
+    if (!capturing)
+        label(recording_overlay_, paused ? "Space to resume" : "Space to pause", 14, 115, 285, ink,
+              26);
 }
 void UI::update_playback_clock(unsigned seconds) {
     if (!playback_clock_ || playback_seconds_ == static_cast<long>(seconds))
@@ -556,18 +586,17 @@ void UI::render_header() {
     }
 }
 
-void UI::render_delivery_panel(const char *title, const char *hint, bool animate) {
-    auto *panel = folded_sheet(body_, 10, 11, 295, 108);
-    if (animate) {
-        auto *model = shape(panel, 8, 4, 125, 100, 0, face);
-        lv_obj_add_event_cb(model, draw_tesseract, LV_EVENT_DRAW_MAIN, nullptr);
-        animate_redraw(model, 24);
-    }
-    const int text_x = animate ? 145 : 16;
-    auto *heading = label(panel, title, text_x, animate ? 21 : 14, 281 - text_x, ink, 37);
-    if (markdown_fonts_.heading)
-        lv_obj_set_style_text_font(heading, markdown_fonts_.heading, 0);
-    label(panel, hint, text_x, animate ? 57 : 61, 281 - text_x, green, 36);
+void UI::render_voice_state(lv_obj_t *parent, const char *text, std::uint32_t color) {
+    shape(parent, 18, 19, 6, 6, 3, color);
+    auto *state = label(parent, text, 32, 15, 120, color, 18);
+    lv_obj_set_style_text_font(state, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_letter_space(state, 2, 0);
+}
+void UI::render_sending(const char *state) {
+    render_voice_state(body_, state, green);
+    auto *model = shape(body_, 88, 30, 144, 114, 0, paper);
+    lv_obj_add_event_cb(model, draw_tesseract, LV_EVENT_DRAW_MAIN, nullptr);
+    animate_redraw(model, 24);
 }
 void UI::render_reader() {
     // Keep the original message positions to associate user events with the following reply.
@@ -602,8 +631,7 @@ void UI::render_reader() {
     if (latest && !messages.empty() && messages.back().role == "user" &&
         !messages.back().terminal && playback_status.empty() &&
         (status.empty() || status == "Message accepted")) {
-        render_delivery_panel(
-            "Sent", messages.back().voice_clips.empty() ? "Message" : "Voice message", true);
+        render_sending("SENT");
         return;
     }
 
@@ -749,15 +777,21 @@ void UI::render() {
     } else if (uncertain || voice_pending || submitting || status == "Network unavailable") {
         const bool retained = voice_pending && !busy;
         const bool offline = status == "Network unavailable";
+        if (!uncertain && !retained && !offline) {
+            render_sending("SENDING");
+            return;
+        }
         const char *title = uncertain  ? "Delivery unconfirmed"
                             : retained ? "Recording saved"
-                            : offline  ? "Offline"
-                                       : "Sending";
+                                       : "Offline";
         const char *hint = uncertain  ? "Ctrl+L to refresh chat"
                            : retained ? "Ctrl+R to retry   Esc to discard"
-                           : offline  ? "Ctrl+L to reconnect   Esc for chat"
-                                      : "Voice message";
-        render_delivery_panel(title, hint, !uncertain && !retained && !offline);
+                                      : "Ctrl+L to reconnect   Esc for chat";
+        auto *panel = folded_sheet(body_, 10, 11, 295, 108);
+        auto *heading = label(panel, title, 16, 14, 265, ink, 37);
+        if (markdown_fonts_.heading)
+            lv_obj_set_style_text_font(heading, markdown_fonts_.heading, 0);
+        label(panel, hint, 16, 61, 265, green, 36);
         return;
     } else {
         render_reader();

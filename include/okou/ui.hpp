@@ -78,7 +78,8 @@ class UI {
     int reading_line_ = 22;
     void render_voice_panel(bool capturing);
     void render_reader();
-    void render_delivery_panel(const char *title, const char *hint, bool animate);
+    void render_voice_state(lv_obj_t *parent, const char *text, std::uint32_t color);
+    void render_sending(const char *state);
     void render_header();
     lv_obj_t *label(lv_obj_t *parent, const std::string &text, int x, int y, int width,
                     std::uint32_t color, int height = 0);
