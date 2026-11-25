@@ -197,7 +197,6 @@ Config load_config(const std::string &path) {
     set(c.oauth_issuer, "oauth_issuer", "OKOU_ZERO_OAUTH_ISSUER");
     set(c.oauth_client_id, "oauth_client_id", "OKOU_ZERO_OAUTH_CLIENT_ID");
     set(c.oauth_resource, "oauth_resource", "OKOU_ZERO_OAUTH_RESOURCE");
-    set(c.scopes, "scopes", "OKOU_ZERO_SCOPES");
     set(c.keyboard, "keyboard", "OKOU_ZERO_KEYBOARD");
     set(c.framebuffer, "framebuffer", "OKOU_ZERO_FRAMEBUFFER");
     set(c.capture_device, "capture_device", "OKOU_ZERO_CAPTURE_DEVICE");
@@ -213,7 +212,6 @@ void save_config(const Config &c) {
                                                   {"oauth_issuer", c.oauth_issuer},
                                                   {"oauth_client_id", c.oauth_client_id},
                                                   {"oauth_resource", c.oauth_resource},
-                                                  {"scopes", c.scopes},
                                                   {"keyboard", c.keyboard},
                                                   {"framebuffer", c.framebuffer},
                                                   {"capture_device", c.capture_device},

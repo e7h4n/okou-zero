@@ -232,7 +232,9 @@ DeviceCode OAuth::begin() {
     HttpResponse response;
     try {
         response = post(http_, str(metadata_, "device_authorization_endpoint", true),
-                        {{"client_id", config_.oauth_client_id}, {"scope", config_.scopes}});
+                        {{"client_id", config_.oauth_client_id},
+                         {"scope", "openid profile offline_access user:org:read "
+                                   "okou:chat:read okou:chat:send"}});
         auto j = checked(response);
         DeviceCode c;
         c.device_code = str(j, "device_code", true);

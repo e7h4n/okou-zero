@@ -36,7 +36,6 @@ The configuration defaults to `$XDG_CONFIG_HOME/okou-zero/config.json` or
 | `oauth_issuer` | `OKOU_ZERO_OAUTH_ISSUER` |
 | `oauth_client_id` | `OKOU_ZERO_OAUTH_CLIENT_ID` |
 | `oauth_resource` | `OKOU_ZERO_OAUTH_RESOURCE` |
-| `scopes` | `OKOU_ZERO_SCOPES` |
 | `data_dir` | `OKOU_ZERO_DATA_DIR` (absolute path) |
 | `keyboard` | `OKOU_ZERO_KEYBOARD` |
 | `framebuffer` | `OKOU_ZERO_FRAMEBUFFER` |

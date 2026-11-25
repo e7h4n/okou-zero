@@ -21,8 +21,6 @@ struct Config {
     std::string oauth_issuer;
     std::string oauth_client_id = build::oauth_client_id;
     std::string oauth_resource = std::string(build::api_origin) + "/mcp";
-    std::string scopes = "openid profile offline_access user:org:read okou:chat:read "
-                         "okou:chat:send";
     std::string keyboard = "/dev/input/by-path/platform-3f804000.i2c-event";
     std::string framebuffer = "/dev/fb0";
     std::string capture_device = "pulse";

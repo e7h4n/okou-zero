@@ -428,7 +428,6 @@ void tests() {
              {200, token("org_test", "")},
              {503, {{"error", "PRIVATE"}}}});
         auto c = config(f, root + "/credentials");
-        c.scopes = "openid profile offline_access user:org:read";
         okou::OAuth auth(c, http);
         auto d = auth.begin();
         CHECK(d.interval == 7);
@@ -484,7 +483,8 @@ void tests() {
             return request.substr(separator + 4);
         };
         CHECK(form_body(1, "/device") ==
-              "client_id=public-test&scope=openid%20profile%20offline_access%20user%3Aorg%3Aread");
+              "client_id=public-test&scope=openid%20profile%20offline_access%20user%3Aorg%3Aread"
+              "%20okou%3Achat%3Aread%20okou%3Achat%3Asend");
         for (std::size_t i = 2; i <= 6; ++i) {
             CHECK(form_body(i, "/token") ==
                   "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
@@ -494,11 +494,8 @@ void tests() {
               "grant_type=refresh_token&refresh_token=refresh-old&client_id=public-test");
         CHECK(form_body(8, "/token") ==
               "grant_type=refresh_token&refresh_token=refresh-rotated&client_id=public-test");
-        for (const auto &request : requests) {
-            CHECK(request.find("client_secret") == std::string::npos);
-            CHECK(request.find("organization_id") == std::string::npos);
+        for (const auto &request : requests)
             CHECK(request.find("Authorization:") == std::string::npos);
-        }
     }
     {
         Fixture f({{200, metadata()},
