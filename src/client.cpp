@@ -21,6 +21,13 @@ void write_private(const std::string &, const Json &);
 } // namespace detail
 namespace {
 constexpr std::size_t max_events = 8192, max_messages = 200;
+constexpr char cardputer_context[] =
+    "The user sent this message from an M5Stack Cardputer Zero. Its 320x170 screen displays basic "
+    "Markdown and fits about 3-4 lines of body text (roughly 45-60 Chinese characters) at a time. "
+    "Scrolling makes long replies hard to read. Lead with the answer and keep it brief. "
+    "Markdown links show only their labels and cannot be opened on the handheld. When a link is "
+    "needed, include it in the reply and tell the user to open this chat on their phone or "
+    "computer to complete the action.";
 [[noreturn]] void invalid() {
     throw std::runtime_error("Invalid or oversized server protocol response");
 }
@@ -589,12 +596,15 @@ SendResult Client::send_voice(const std::string &thread_id, const std::string &f
     if (str(metadata, "id") != thread_id)
         invalid();
     auto sort = uuid();
-    Json part = {{"type", "voice"}, {"clips", Json::array({{{"fileId", file_id}}})}};
+    const Json parts = Json::array({
+        {{"type", "voice"}, {"clips", Json::array({{{"fileId", file_id}}})}},
+        {{"type", "additional_info"}, {"text", cardputer_context}},
+    });
     Json body = {{"threadId", thread_id},
                  {"prompt", "(see message parts)"},
                  {"clientEventId", id},
                  {"chatThreadSortEventId", sort},
-                 {"userMessage", {{"version", 1}, {"parts", Json::array({part})}}},
+                 {"userMessage", {{"version", 1}, {"parts", parts}}},
                  {"hasTextContent", false},
                  {"computerUseHostId", metadata.value("computerUseHostId", Json(nullptr))},
                  {"cloudBrowserEnabled", flag(metadata, "cloudBrowserEnabled")}};
