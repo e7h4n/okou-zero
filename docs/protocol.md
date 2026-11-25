@@ -3,12 +3,12 @@
 ## Network endpoints
 
 All authenticated Okou chat operations use `POST https://api.okou.ai/mcp`. This
-is the only production endpoint that receives the Okou access token. The device
-uploads WAVs to an HTTPS Cloudflare R2 endpoint returned by `prepare_voice_upload`.
+is the only production endpoint that receives an Okou bearer authorization header.
+The device uploads WAVs to an HTTPS Cloudflare R2 endpoint returned by `prepare_voice_upload`.
 Snapshot and playback downloads use signed GET URLs supplied by MCP. File transfers
 carry no Okou access token and do not follow redirects.
 
-Device sign-in and token renewal use the [OAuth endpoints](auth-setup.md).
+Device sign-in, token renewal and revocation use the [OAuth endpoints](auth-setup.md).
 Realtime delivery uses Ably. The standalone package checks GitHub for
 [signed updates](updates.md). The Store edition receives updates through the launcher.
 
