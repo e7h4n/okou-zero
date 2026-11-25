@@ -41,6 +41,9 @@ The configuration defaults to `$XDG_CONFIG_HOME/okou-zero/config.json` or
 | `framebuffer` | `OKOU_ZERO_FRAMEBUFFER` |
 | `capture_device` | `OKOU_ZERO_CAPTURE_DEVICE` |
 
+The production chat transport accepts the bundled MCP endpoint. A numeric loopback
+API origin is supported for the local protocol fixtures described below.
+
 Use a user-owned 0700 directory and a regular 0600 file. Symlinks and hard-linked
 private files are rejected. The package ships a [configuration example](../config/config.example.json).
 
