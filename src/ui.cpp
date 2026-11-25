@@ -463,8 +463,9 @@ void UI::render_voice_panel(bool capturing) {
     recording_overlay_ = shape(root_, 0, 22, 320, 148, 0, paper);
     const bool paused = !capturing && playback_status.rfind("Paused", 0) == 0;
     if (capturing) {
-        render_voice_state(recording_overlay_, "REC", gold);
-        recording_clock_ = shape(recording_overlay_, 219, 10, 84, 25, 0, paper);
+        shape(recording_overlay_, 18, 121, 6, 6, 3, gold);
+        voice_state_label(recording_overlay_, "REC", 117, gold);
+        recording_clock_ = shape(recording_overlay_, 219, 112, 84, 25, 0, paper);
         lv_obj_add_event_cb(
             recording_clock_,
             [](lv_event_t *e) {
@@ -477,7 +478,7 @@ void UI::render_voice_panel(bool capturing) {
         // The scale marks the time window of the rolling sample history.
         for (int i = 0; i <= 12; ++i) {
             const int height = i % 3 == 0 ? 5 : 2;
-            shape(recording_overlay_, 18 + i * 282 / 12, 132 - height, 1, height, 0, border);
+            shape(recording_overlay_, 18 + i * 282 / 12, 14, 1, height, 0, border);
         }
     } else {
         auto *title =
@@ -488,7 +489,7 @@ void UI::render_voice_panel(bool capturing) {
         lv_obj_set_style_text_font(playback_clock_, &lv_font_montserrat_16, 0);
         playback_seconds_ = -1;
     }
-    auto *wave = shape(recording_overlay_, 18, capturing ? 48 : 37, 284, 72, 0, paper);
+    auto *wave = shape(recording_overlay_, 18, capturing ? 30 : 37, 284, 72, 0, paper);
     lv_obj_add_event_cb(
         wave,
         [](lv_event_t *e) {
@@ -586,17 +587,18 @@ void UI::render_header() {
     }
 }
 
-void UI::render_voice_state(lv_obj_t *parent, const char *text, std::uint32_t color) {
-    shape(parent, 18, 19, 6, 6, 3, color);
-    auto *state = label(parent, text, 32, 15, 120, color, 18);
+lv_obj_t *UI::voice_state_label(lv_obj_t *parent, const char *text, int y, std::uint32_t color) {
+    auto *state = label(parent, text, 32, y, 256, color, 18);
     lv_obj_set_style_text_font(state, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_letter_space(state, 2, 0);
+    return state;
 }
 void UI::render_sending(const char *state) {
-    render_voice_state(body_, state, green);
-    auto *model = shape(body_, 88, 30, 144, 114, 0, paper);
+    auto *model = shape(body_, 88, 2, 144, 114, 0, paper);
     lv_obj_add_event_cb(model, draw_tesseract, LV_EVENT_DRAW_MAIN, nullptr);
     animate_redraw(model, 24);
+    auto *caption = voice_state_label(body_, state, 121, green);
+    lv_obj_set_style_text_align(caption, LV_TEXT_ALIGN_CENTER, 0);
 }
 void UI::render_reader() {
     // Keep the original message positions to associate user events with the following reply.
