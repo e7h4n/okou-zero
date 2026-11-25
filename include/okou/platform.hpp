@@ -68,11 +68,18 @@ class Keyboard {
   public:
     Keyboard(bool desktop, const std::string &path);
     ~Keyboard();
-    std::vector<Input> poll();
+    std::vector<Input> poll(bool wake_only = false);
+    int descriptor() const {
+        return fd_;
+    }
+    bool activity() const {
+        return activity_;
+    }
 
   private:
     bool desktop_, shift_ = false, ctrl_ = false, caps_ = false;
-    bool input_dropped_ = false;
+    bool input_dropped_ = false, activity_ = false;
+    int wake_key_ = -1;
     int fd_ = -1;
     std::unique_ptr<UpdateShortcut> update_shortcut_;
 };

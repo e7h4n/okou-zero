@@ -35,6 +35,9 @@ class UpdateProcess {
     const UpdateView &view() const {
         return view_;
     }
+    int descriptor() const {
+        return pipe_;
+    }
     bool installing() const {
         return pid_ > 0 && applying_;
     }

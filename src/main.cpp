@@ -1,10 +1,12 @@
 #include "disk_file.hpp"
 #include "emoji.hpp"
+#include "idle_display.hpp"
 #include "okou/diagnostics.hpp"
 #include "okou/ui.hpp"
 #include "update_process.hpp"
 #include "volume_control.hpp"
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
@@ -12,6 +14,8 @@
 #include <curl/curl.h>
 #include <deque>
 #include <iostream>
+#include <poll.h>
+#include <sys/eventfd.h>
 #include <thread>
 #include <unistd.h>
 #include <utility>
@@ -23,6 +27,30 @@ void interrupt(int) {
     interrupted.store(true);
 }
 using Update = std::function<void(UI &)>;
+class UiWake {
+    int fd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+
+  public:
+    UiWake() {
+        if (fd_ < 0)
+            throw std::runtime_error("Cannot create UI wake descriptor");
+    }
+    ~UiWake() {
+        close(fd_);
+    }
+    int descriptor() const {
+        return fd_;
+    }
+    void notify() const {
+        while (eventfd_write(fd_, 1) < 0 && errno == EINTR) {
+        }
+    }
+    void consume() const {
+        eventfd_t value;
+        while (eventfd_read(fd_, &value) < 0 && errno == EINTR) {
+        }
+    }
+};
 class Engine {
     struct Session {
         Config config;
@@ -34,6 +62,7 @@ class Engine {
         std::mutex io;
         explicit Session(Config cfg) : config(std::move(cfg)), auth(config, http) {}
     };
+    UiWake &wake_;
     std::shared_ptr<Session> session_;
     std::unique_ptr<Realtime> realtime_;
     RecordingWaveform &waveform_;
@@ -56,6 +85,7 @@ class Engine {
     void emit(Update update) {
         std::lock_guard<std::mutex> guard(mutex_);
         updates_.push_back(std::move(update));
+        wake_.notify();
     }
     void enqueue(std::function<void()> task) {
         {
@@ -129,8 +159,8 @@ class Engine {
     }
 
   public:
-    Engine(Config config, RecordingWaveform &waveform)
-        : session_(std::make_shared<Session>(std::move(config))), waveform_(waveform) {
+    Engine(Config config, RecordingWaveform &waveform, UiWake &wake)
+        : wake_(wake), session_(std::make_shared<Session>(std::move(config))), waveform_(waveform) {
         worker_ = std::thread([this] {
             while (!stopping_) {
                 std::function<void()> task;
@@ -426,6 +456,7 @@ class Engine {
                 }
             }
             playback_active_ = false;
+            wake_.notify();
         });
     }
     void voice(bool finish, const Thread &thread) {
@@ -604,12 +635,13 @@ int main(int argc, char **argv) {
         if (headless && screenshot.empty())
             screenshot = "okou-zero.ppm";
         UI ui(display.get());
+        UiWake wake;
         std::unique_ptr<Engine> engine;
         if (demo)
             ui.demo(screen);
         else {
             ui.busy = true;
-            engine = std::make_unique<Engine>(config, ui.recording_waveform);
+            engine = std::make_unique<Engine>(config, ui.recording_waveform, wake);
             engine->initialize();
         }
         if (self_test) {
@@ -638,6 +670,10 @@ int main(int argc, char **argv) {
             ui.update_history({{"voice_event", "user", "spoken message", false}});
             ui.complete_send(ui.current.id, "spoken message", false, "voice_event");
             check(ui.messages.size() == 1);
+            check(!ui.take_local_reply());
+            ui.update_history({{"voice_event", "user", "spoken message", false},
+                               {"answer", "assistant", "Reply", true}});
+            check(ui.take_local_reply() && !ui.take_local_reply());
             ui.update_history({});
             check(ui.messages.empty());
             ui.complete_send(ui.current.id, "uncertain voice", true);
@@ -699,11 +735,31 @@ int main(int argc, char **argv) {
         std::string enter_thread;
         if (!demo)
             updater.start(false, OKOU_ZERO_VERSION);
+        using namespace std::chrono;
+        const auto *home = std::getenv("HOME");
+        const bool device = !OKOU_ZERO_DESKTOP && !demo;
+        IdleDisplay backlight(
+            "/sys/class/backlight/backlight/brightness",
+            device ? launcher_dark_time(std::filesystem::path(home ? home : "/root") /
+                                        ".config/cardputerzero/config.json")
+                   : seconds(0));
+        auto wait = [&](steady_clock::time_point deadline) {
+            pollfd sources[] = {{keyboard ? keyboard->descriptor() : -1, POLLIN, 0},
+                                {wake.descriptor(), POLLIN, 0},
+                                {updater.descriptor(), POLLIN, 0}};
+            auto timeout = ceil<milliseconds>(deadline - steady_clock::now()).count();
+            if (::poll(sources, std::size(sources),
+                       static_cast<int>(std::clamp<int64_t>(timeout, 0, 5000))) < 0 &&
+                errno != EINTR)
+                throw std::runtime_error("UI event wait failed");
+            if (sources[1].revents & POLLIN)
+                wake.consume();
+        };
         while ((running && !interrupted) || updater.installing()) {
             auto now = std::chrono::steady_clock::now();
-            lv_tick_inc(static_cast<std::uint32_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(now - last).count()));
-            last = now;
+            const auto elapsed = duration_cast<milliseconds>(now - last);
+            lv_tick_inc(static_cast<std::uint32_t>(elapsed.count()));
+            last += elapsed;
             if (!demo && now >= next_battery_read) {
                 next_battery_read = now + std::chrono::seconds(5);
                 auto battery = read_battery_status();
@@ -713,8 +769,11 @@ int main(int argc, char **argv) {
                     dirty = true;
                 }
             }
-            if (engine && engine->drain(ui))
+            bool reply = false;
+            if (engine && engine->drain(ui)) {
                 dirty = true;
+                reply = ui.take_local_reply();
+            }
             if (engine) {
                 auto playback = engine->playback_status();
                 if (ui.playback_status != playback) {
@@ -733,20 +792,28 @@ int main(int argc, char **argv) {
             std::vector<Input> inputs;
             try {
                 if (keyboard)
-                    inputs = keyboard->poll();
+                    inputs = keyboard->poll(backlight.asleep());
             } catch (const std::exception &) {
                 if (!updater.installing())
                     throw;
+                keyboard.reset();
                 running = false; // Finish the confirmed install before leaving.
+            }
+            if ((keyboard && keyboard->activity()) || reply) {
+                dirty |= backlight.asleep();
+                backlight.wake();
             }
             if (awaiting_first_screen && ui.busy) {
                 for (const auto &input : inputs) {
                     if (input.key == Key::quit || input.key == Key::escape)
                         running = false;
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                if (running)
+                    wait(next_battery_read);
                 continue;
             }
+            if (awaiting_first_screen)
+                backlight.wake();
             awaiting_first_screen = false;
             for (auto input : inputs) {
                 if (updater.installing())
@@ -858,6 +925,14 @@ int main(int argc, char **argv) {
                     break;
                 }
             }
+            if (ui.recording || updater.installing())
+                backlight.wake();
+            else
+                backlight.expire(now);
+            if (backlight.asleep()) {
+                wait(next_battery_read);
+                continue;
+            }
             if (dirty) {
                 ui.render();
                 dirty = false;
@@ -869,13 +944,22 @@ int main(int argc, char **argv) {
             if (engine)
                 ui.update_playback_clock(engine->playback_seconds());
             ui.update_recording_clock();
-            lv_timer_handler();
+            const auto lv_delay = lv_timer_handler();
             display.present();
             if (!screenshot.empty() && now - start > std::chrono::milliseconds(600)) {
                 display.screenshot(screenshot);
                 running = false;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // The device can block on evdev; SDL events have no pollable descriptor.
+            auto deadline =
+                std::min({device ? next_battery_read : now + milliseconds(33), backlight.deadline(),
+                          ui.volume_deadline(), steady_clock::now() + milliseconds(lv_delay)});
+            const auto wall = duration_cast<milliseconds>(system_clock::now().time_since_epoch());
+            deadline = std::min(deadline, steady_clock::now() + (minutes(1) - wall % minutes(1)));
+            if (volume.pending())
+                deadline = std::min(deadline, now + milliseconds(10));
+            if (running || updater.installing())
+                wait(deadline);
         }
         engine.reset();
         if (restart && !interrupted) {

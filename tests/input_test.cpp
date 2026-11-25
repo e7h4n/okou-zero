@@ -60,6 +60,18 @@ int main() {
         check(events.size() == 4 && events[0].key == Key::volume_up &&
               events[1].key == Key::volume_up && events[2].key == Key::volume_down &&
               events[3].key == Key::mute);
+        // The wake gesture may span several event batches. Neither repeats nor release
+        // may leak through to push-to-talk, but the next deliberate press must work.
+        emit(EV_KEY, KEY_ENTER, 1);
+        check(keyboard.poll(true).empty() && keyboard.activity());
+        emit(EV_KEY, KEY_ENTER, 2);
+        check(keyboard.poll().empty());
+        emit(EV_KEY, KEY_ENTER, 0);
+        emit(EV_KEY, KEY_ENTER, 1);
+        emit(EV_KEY, KEY_ENTER, 0);
+        events = keyboard.poll();
+        check(events.size() == 2 && events[0].key == Key::enter_down &&
+              events[1].key == Key::enter_up);
         close(ports[0]);
         close(ports[1]);
         std::string text = "a中🙂";

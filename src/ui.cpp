@@ -274,6 +274,7 @@ lv_obj_t *UI::row(const std::string &title, const std::string &detail, int y, bo
     return box;
 }
 void UI::reset_account() {
+    pending_reply_to_.clear();
     messages.clear();
     current = {};
     draft.clear();
@@ -291,6 +292,8 @@ void UI::complete_send(const std::string &thread_id, const std::string &text, bo
                        const std::string &event_id, const std::string &voice_file_id) {
     if (current.id == thread_id) {
         uncertain = was_uncertain;
+        if (!was_uncertain && !event_id.empty())
+            pending_reply_to_ = event_id;
         if (!was_uncertain && !event_id.empty() &&
             std::none_of(messages.begin(), messages.end(),
                          [&](const Message &m) { return m.id == event_id; })) {
@@ -321,11 +324,30 @@ void UI::update_history(std::vector<Message> history) {
     history.insert(history.end(), acknowledged_messages_.begin(), acknowledged_messages_.end());
     messages = std::move(history);
 }
+bool UI::take_local_reply() {
+    if (pending_reply_to_.empty())
+        return false;
+    auto user = std::find_if(messages.begin(), messages.end(), [&](const Message &message) {
+        return message.id == pending_reply_to_;
+    });
+    if (user == messages.end())
+        return false;
+    for (auto it = std::next(user); it != messages.end(); ++it) {
+        if (it->role == "assistant" || it->role == "user") {
+            pending_reply_to_.clear();
+            return it->role == "assistant";
+        }
+    }
+    if (user->terminal)
+        pending_reply_to_.clear();
+    return false;
+}
 void UI::reconcile_send(const std::string &thread_id, bool pending) {
     if (current.id == thread_id)
         uncertain = pending;
 }
 void UI::select_thread(const Thread &thread) {
+    pending_reply_to_.clear();
     current = thread;
     messages.clear();
     acknowledged_messages_.clear();
