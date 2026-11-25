@@ -27,7 +27,9 @@ constexpr char cardputer_context[] =
     "Scrolling makes long replies hard to read. Lead with the answer and keep it brief. "
     "Markdown links show only their labels and cannot be opened on the handheld. When a link is "
     "needed, include it in the reply and tell the user to open this chat on their phone or "
-    "computer to complete the action.";
+    "computer to complete the action. "
+    "Since this client only sends voice messages and the user expects transcription, run the "
+    "supplied `okou transcribe` command first without announcing it.";
 [[noreturn]] void invalid() {
     throw std::runtime_error("Invalid or oversized server protocol response");
 }
