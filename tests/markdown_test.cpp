@@ -19,6 +19,7 @@ int main() {
     auto strong_font = lv_font_montserrat_16;
     okou::MarkdownFonts fonts;
     fonts.bold = &strong_font;
+    std::string heading;
     auto *body =
         okou::markdown_body(screen,
                             "## 标题\n\n3. **粗体** and [link](https://example.org)\n"
@@ -26,7 +27,7 @@ int main() {
                             "```cpp\n**literal**\n  x = 1;\n```\n\n"
                             "| Key | Meaning |\n| --- | --- |\n| ID | A long value that should "
                             "wrap onto multiple lines when displayed in a narrow table cell |",
-                            0, 0, 299, fonts);
+                            299, fonts, heading);
     lv_obj_update_layout(body);
     auto child = [&](int i) { return lv_obj_get_child(body, i); };
     check(contents(child(0)) == "标题");
@@ -48,16 +49,11 @@ int main() {
     check(lv_obj_get_y(child(8)) == lv_obj_get_y(child(9)) && lv_obj_get_x(child(9)) > 0);
     check(lv_obj_get_height(child(9)) > lv_obj_get_height(child(8)));
     check(lv_obj_get_height(body) >= lv_obj_get_y(child(9)) + lv_obj_get_height(child(9)));
-    auto *voice = okou::markdown_body(screen, "[Voice message]", 0, 0, 299, fonts);
-    check(lv_obj_has_class(voice, &lv_label_class));
-    check(std::string(lv_label_get_text(voice)) == "[Voice message]");
-    std::string heading;
     fonts.heading = &strong_font;
-    auto *pinned =
-        okou::markdown_body(screen, "# Short title\n\nFirst line", 0, 0, 220, fonts, &heading);
+    auto *pinned = okou::markdown_body(screen, "# Short title\n\nFirst line", 220, fonts, heading);
     check(heading == "Short title" && contents(lv_obj_get_child(pinned, 0)) == "First line");
     auto *long_title =
-        okou::markdown_body(screen, "# A heading too wide to pin", 0, 0, 40, fonts, &heading);
+        okou::markdown_body(screen, "# A heading too wide to pin", 40, fonts, heading);
     check(heading.empty() &&
           contents(lv_obj_get_child(long_title, 0)) == "A heading too wide to pin");
     lv_display_delete(display);

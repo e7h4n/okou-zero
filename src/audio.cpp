@@ -146,13 +146,13 @@ struct AudioCapture::Impl {
     explicit Impl(std::string name) : device(std::move(name)) {}
     std::string device;
     std::mutex lifecycle;
-    std::atomic_bool stop{false}, active{false};
+    std::atomic_bool stop{false};
     std::thread worker;
     snd_pcm_t *handle = nullptr;
     std::vector<std::int16_t> samples;
     bool failed = false; // Worker writes; owner reads only after join.
 
-    void loop(RecordingWaveform *waveform) noexcept {
+    void loop(RecordingWaveform &waveform) noexcept {
         // ALSA S16_LE describes device bytes; decode explicitly for big-endian hosts.
         std::array<unsigned char, 1024> buffer{};
         while (!stop.load() && samples.size() < max_samples) {
@@ -165,8 +165,7 @@ struct AudioCapture::Impl {
                         samples.push_back(
                             static_cast<std::int16_t>(detail::pcm16le(buffer.data() + 2 * i)));
                     }
-                    if (waveform)
-                        waveform->append(samples.data() + samples.size() - count, count);
+                    waveform.append(samples.data() + samples.size() - count, count);
                 } catch (...) {
                     failed = true;
                     break;
@@ -189,9 +188,7 @@ struct AudioCapture::Impl {
                 break;
             }
         }
-        if (waveform)
-            waveform->clear();
-        active.store(false);
+        waveform.clear();
     }
     void join() noexcept {
         stop.store(true);
@@ -202,14 +199,13 @@ struct AudioCapture::Impl {
             snd_pcm_close(handle);
             handle = nullptr;
         }
-        active.store(false);
     }
 };
 AudioCapture::AudioCapture(std::string device) : impl_(std::make_unique<Impl>(std::move(device))) {}
 AudioCapture::~AudioCapture() {
     cancel();
 }
-void AudioCapture::start(RecordingWaveform *waveform) {
+void AudioCapture::start(RecordingWaveform &waveform) {
     std::lock_guard<std::mutex> lock(impl_->lifecycle);
     if (impl_->worker.joinable())
         throw std::logic_error("Finish or cancel the previous recording first");
@@ -240,10 +236,8 @@ void AudioCapture::start(RecordingWaveform *waveform) {
         require_alsa(snd_pcm_hw_params_set_buffer_size_near(impl_->handle, raw, &buffer));
         require_alsa(snd_pcm_hw_params(impl_->handle, raw));
         require_alsa(snd_pcm_prepare(impl_->handle));
-        impl_->active.store(true);
-        if (waveform)
-            waveform->clear();
-        impl_->worker = std::thread([p = impl_.get(), waveform] { p->loop(waveform); });
+        waveform.clear();
+        impl_->worker = std::thread([p = impl_.get(), &waveform] { p->loop(waveform); });
     } catch (...) {
         impl_->join();
         throw;
@@ -265,8 +259,5 @@ void AudioCapture::cancel() {
     impl_->join();
     std::vector<std::int16_t>().swap(impl_->samples);
     impl_->failed = false;
-}
-bool AudioCapture::recording() const {
-    return impl_->active.load();
 }
 } // namespace okou

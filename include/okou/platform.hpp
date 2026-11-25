@@ -24,13 +24,11 @@ enum class Key {
     down,
     left,
     right,
-    tab,
     page_up,
     page_down,
-    record,
+    retry_voice,
     workspace,
     reload,
-    logout,
     update,
     quit
 };

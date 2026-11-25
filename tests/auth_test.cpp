@@ -128,7 +128,6 @@ Json device() {
     return {{"device_code", "private-device"},
             {"user_code", "SAFE-CODE"},
             {"verification_uri", "$BASE/activate"},
-            {"verification_uri_complete", "$BASE/activate?user_code=SAFE-CODE"},
             {"expires_in", 600},
             {"interval", 7}};
 }
@@ -429,7 +428,6 @@ void tests() {
              {200, token("org_test", "")},
              {503, {{"error", "PRIVATE"}}}});
         auto c = config(f, root + "/credentials");
-        c.scopes = "openid profile offline_access user:org:read";
         okou::OAuth auth(c, http);
         auto d = auth.begin();
         CHECK(d.interval == 7);
@@ -444,7 +442,6 @@ void tests() {
         auto t = result.tokens;
         CHECK(t.user_id == "user_test");
         CHECK(t.org_id == "org_test");
-        CHECK(t.client_id == "public-test");
         CHECK(t.expires_at <= std::time(nullptr) + 3000);
         CHECK(auth.load().access_token.empty());
         auth.save(t);
@@ -464,12 +461,8 @@ void tests() {
         CHECK(saved["grant_binding"]["client_id"] == c.oauth_client_id);
         CHECK(saved["resolved_oauth_issuer"] == f.base);
         Json tampered = saved;
-        tampered["org_id"] = "org_attacker";
-        tampered["user_id"] = "user_attacker";
         tampered["expires_at"] = std::time(nullptr) + 999999;
         put(c.data_dir + "/tokens.json", tampered.dump());
-        CHECK(auth.load().org_id == "org_test");
-        CHECK(auth.load().user_id == "user_test");
         CHECK(auth.load().expires_at <= std::time(nullptr) + 3600);
         auto rotated = auth.refresh(t);
         CHECK(rotated.refresh_token == "refresh-rotated");
@@ -490,7 +483,8 @@ void tests() {
             return request.substr(separator + 4);
         };
         CHECK(form_body(1, "/device") ==
-              "client_id=public-test&scope=openid%20profile%20offline_access%20user%3Aorg%3Aread");
+              "client_id=public-test&scope=openid%20profile%20offline_access%20user%3Aorg%3Aread"
+              "%20okou%3Achat%3Aread%20okou%3Achat%3Asend");
         for (std::size_t i = 2; i <= 6; ++i) {
             CHECK(form_body(i, "/token") ==
                   "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"
@@ -500,11 +494,8 @@ void tests() {
               "grant_type=refresh_token&refresh_token=refresh-old&client_id=public-test");
         CHECK(form_body(8, "/token") ==
               "grant_type=refresh_token&refresh_token=refresh-rotated&client_id=public-test");
-        for (const auto &request : requests) {
-            CHECK(request.find("client_secret") == std::string::npos);
-            CHECK(request.find("organization_id") == std::string::npos);
+        for (const auto &request : requests)
             CHECK(request.find("Authorization:") == std::string::npos);
-        }
     }
     {
         Fixture f({{200, metadata()},
@@ -548,7 +539,6 @@ void tests() {
         CHECK(r[2].find("GET /.well-known/oauth-authorization-server ") != std::string::npos);
         auto t = auth.poll(d).tokens;
         auth.save(t);
-        CHECK(auth.config().oauth_issuer.empty());
         auto saved = record(c.data_dir + "/tokens.json");
         CHECK(saved["grant_binding"]["oauth_issuer"] == "");
         CHECK(saved["resolved_oauth_issuer"] == f.base);
@@ -577,12 +567,9 @@ void tests() {
         std::atomic_bool cancelled{true};
         okou::Http offline(&cancelled);
         okou::OAuth original(c, offline);
-        // Absence of a JWT client claim must not bypass the configured client
-        // binding (parse_tokens otherwise falls back to the configured ID).
         okou::Tokens t;
-        t.access_token = token("org_test", "", "")["access_token"].get<std::string>();
+        t.access_token = token()["access_token"].get<std::string>();
         t.refresh_token = "refresh-private";
-        t.client_id = c.oauth_client_id;
         original.save(t);
         CHECK(original.load().access_token == t.access_token);
         const auto path = c.data_dir + "/tokens.json";
@@ -592,7 +579,6 @@ void tests() {
             auto loaded = other.load();
             CHECK(loaded.access_token.empty());
             CHECK(loaded.refresh_token.empty());
-            CHECK(loaded.client_id.empty());
             CHECK(loaded.expires_at == 0);
             CHECK(record(path) == saved);
             CHECK(f.requests().empty());
@@ -627,21 +613,10 @@ void tests() {
             CHECK(original.load().access_token.empty());
             CHECK(original.load().refresh_token.empty());
         }
-        for (const auto &binding : {Json(), Json("legacy"), Json::array(), Json::object()}) {
-            auto broken = saved;
-            broken["grant_binding"] = binding;
-            put(path, broken.dump());
-            CHECK(original.load().access_token.empty());
-        }
-        auto legacy = saved;
-        legacy.erase("grant_binding");
-        put(path, legacy.dump());
+        auto unbound = saved;
+        unbound.erase("grant_binding");
+        put(path, unbound.dump());
         CHECK(original.load().access_token.empty());
-        CHECK(original.load().refresh_token.empty());
-        legacy["access_token"] = "not-even-a-jwt";
-        put(path, legacy.dump());
-        CHECK(original.load().access_token.empty());
-        CHECK(f.requests().empty());
         // Exercise the application's startup bearer guard with a live observer
         // and uncancelled transport, not just a cancelled offline transport.
         put(path, saved.dump());

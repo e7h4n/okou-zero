@@ -78,10 +78,9 @@ int main() {
     check(wave.snapshot().back().low == 0, "A new capture discards the previous partial column");
     // No start() call: these lifecycle checks must never open a capture device.
     okou::AudioCapture audio("not-opened-by-tests");
-    check(!audio.recording(), "Constructor never records");
     check(audio.finish().empty(), "Finish before start is empty");
     audio.cancel();
     audio.cancel();
-    check(!audio.recording() && audio.finish().empty(), "Cancel is idempotent");
+    check(audio.finish().empty(), "Cancelled capture has no audio");
     std::cout << "audio_test passed (synthetic WAV, no microphone opened)\n";
 }

@@ -189,16 +189,6 @@ void tests() {
         CHECK(!error([&] { h.request("GET", s.url()); }).uncertain);
     }
     {
-        Server s(reply(200, "{}"));
-        std::string binary("a\0b", 3);
-        h.request("POST", s.url(), {}, {}, {},
-                  {{"file", binary, "segment.wav", "audio/wav"},
-                   {"options", "{}", {}, "application/json"}});
-        s.join();
-        CHECK(s.received.find(binary) != std::string::npos);
-        CHECK(s.received.find("filename=\"segment.wav\"") != std::string::npos);
-    }
-    {
         std::atomic_bool cancelled{true};
         okou::Http hc(&cancelled);
         CHECK(!error([&] { hc.request("POST", "https://example.invalid"); }).uncertain);

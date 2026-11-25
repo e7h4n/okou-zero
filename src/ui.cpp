@@ -1,9 +1,9 @@
 #include "okou/ui.hpp"
-#include "emoji.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <stdexcept>
 
 namespace okou {
 namespace {
@@ -149,7 +149,7 @@ lv_obj_t *folded_sheet(lv_obj_t *parent, int x, int y, int width, int height) {
     return sheet;
 }
 } // namespace
-UI::UI(lv_display_t *display) : emoji_(std::make_unique<EmojiRenderer>()) {
+UI::UI(lv_display_t *display) {
     root_ = lv_display_get_screen_active(display);
     lv_obj_remove_style_all(root_);
     lv_obj_set_style_bg_color(root_, lv_color_hex(paper), 0);
@@ -235,8 +235,7 @@ lv_obj_t *UI::label(lv_obj_t *parent, const std::string &text, int x, int y, int
     }
     return object;
 }
-lv_obj_t *UI::row(const std::string &title, const std::string &detail, int y, bool chosen,
-                  std::uint32_t color, const char *icon, bool emoji_badge) {
+void UI::settings_row(const std::string &title, const std::string &detail, int y, bool chosen) {
     auto *box = lv_obj_create(body_);
     lv_obj_remove_style_all(box);
     lv_obj_set_pos(box, 5, y);
@@ -247,38 +246,18 @@ lv_obj_t *UI::row(const std::string &title, const std::string &detail, int y, bo
         lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
         lv_obj_set_style_radius(box, 5, 0);
     }
-    auto parts = split_emoji_title(title);
-    const bool badge = emoji_badge && !parts.second.empty();
-    if (icon) {
-        auto *glyph = label(box, icon, 7, 6, 20, muted, 17);
-        lv_obj_set_style_text_font(glyph, &lv_font_montserrat_16, 0);
-    }
-    int text_x = icon ? 33 : 7;
-    if (badge && !parts.first.empty()) {
-        auto *back = shape(box, 14, 12, 15, 15, LV_RADIUS_CIRCLE, chosen ? accent : paper);
-        if (!emoji_->draw(box, parts.first, 15, 13, 12))
-            lv_obj_delete(back);
-        else
-            parts.first.clear();
-    } else if (emoji_->draw(box, parts.first, icon ? 30 : 7, 5, 18)) {
-        text_x += 23;
-        parts.first.clear();
-    }
-    label(box, parts.first.empty() ? parts.second : title, text_x, detail.empty() ? 0 : -3,
-          280 - text_x, color, detail.empty() ? 27 : 21);
+    label(box, title, 7, detail.empty() ? 0 : -3, 273, ink, detail.empty() ? 27 : 21);
     if (!detail.empty()) {
-        auto *subtitle = label(box, detail, text_x, 14, 280 - text_x, muted, 14);
+        auto *subtitle = label(box, detail, 7, 14, 273, muted, 14);
         lv_obj_set_style_text_font(subtitle, detail_font_ ? detail_font_ : &lv_font_montserrat_12,
                                    0);
     }
-    return box;
 }
 void UI::reset_account() {
-    pending_reply_to_.clear();
     messages.clear();
-    current = {};
-    draft.clear();
-    user_id.clear();
+    thread_id.clear();
+    pending_reply_to_.clear();
+    client_id_input.clear();
     org_id.clear();
     user_code.clear();
     verification_uri.clear();
@@ -288,27 +267,25 @@ void UI::reset_account() {
     turn_direction_ = 0;
     busy = recording = uncertain = submitting = voice_pending = voice_working = false;
 }
-void UI::complete_send(const std::string &thread_id, const std::string &text, bool was_uncertain,
-                       const std::string &event_id, const std::string &voice_file_id) {
-    if (current.id == thread_id) {
-        uncertain = was_uncertain;
-        if (!was_uncertain && !event_id.empty())
-            pending_reply_to_ = event_id;
-        if (!was_uncertain && !event_id.empty() &&
-            std::none_of(messages.begin(), messages.end(),
-                         [&](const Message &m) { return m.id == event_id; })) {
-            Message message{event_id, "user", text, false};
-            if (!voice_file_id.empty())
-                message.voice_clips.push_back(voice_file_id);
-            acknowledged_messages_.push_back(message);
-            if (acknowledged_messages_.size() > 30)
-                acknowledged_messages_.erase(acknowledged_messages_.begin());
-            messages.push_back(std::move(message));
-        }
-        if (!was_uncertain && !event_id.empty() && !messages.empty() &&
-            messages.back().id == event_id) {
-            navigation_ = {};
-            turn_direction_ = 0;
+void UI::complete_send(const std::string &id, const SendResult &result,
+                       const std::string &file_id) {
+    if (thread_id == id) {
+        uncertain = result.uncertain;
+        if (!uncertain) {
+            pending_reply_to_ = result.client_event_id;
+            if (std::none_of(messages.begin(), messages.end(),
+                             [&](const Message &m) { return m.id == result.client_event_id; })) {
+                Message message{
+                    result.client_event_id, "user", "[Voice message]", false, {file_id}};
+                acknowledged_messages_.push_back(message);
+                if (acknowledged_messages_.size() > 30)
+                    acknowledged_messages_.erase(acknowledged_messages_.begin());
+                messages.push_back(std::move(message));
+            }
+            if (messages.back().id == result.client_event_id) {
+                navigation_ = {};
+                turn_direction_ = 0;
+            }
         }
     }
     submitting = false;
@@ -342,13 +319,13 @@ bool UI::take_local_reply() {
         pending_reply_to_.clear();
     return false;
 }
-void UI::reconcile_send(const std::string &thread_id, bool pending) {
-    if (current.id == thread_id)
+void UI::reconcile_send(const std::string &id, bool pending) {
+    if (thread_id == id)
         uncertain = pending;
 }
-void UI::select_thread(const Thread &thread) {
+void UI::open_thread(const std::string &id) {
     pending_reply_to_.clear();
-    current = thread;
+    thread_id = id;
     messages.clear();
     acknowledged_messages_.clear();
     navigation_ = {};
@@ -369,11 +346,11 @@ Action UI::handle(const Input &input) {
     if (input.key == Key::reload && !busy && !recording && !voice_pending)
         return Action::refresh;
     if (page == Page::setup) {
-        if ((input.key == Key::text || input.key == Key::space) && draft.size() < 512)
-            draft += input.text;
+        if ((input.key == Key::text || input.key == Key::space) && client_id_input.size() < 512)
+            client_id_input += input.text;
         if (input.key == Key::backspace)
-            erase_utf8(draft);
-        if (input.key == Key::enter && !draft.empty() && !busy)
+            erase_utf8(client_id_input);
+        if (input.key == Key::enter && !client_id_input.empty() && !busy)
             return Action::configure;
         if (input.key == Key::escape)
             return Action::quit;
@@ -396,7 +373,7 @@ Action UI::handle(const Input &input) {
         if (input.key == Key::escape && !busy && !recording && !voice_pending && !submitting) {
             page = Page::settings;
             selected = 0;
-        } else if (input.key == Key::record && voice_pending && !busy && !submitting &&
+        } else if (input.key == Key::retry_voice && voice_pending && !busy && !submitting &&
                    !voice_working && !uncertain) {
             voice_working = true;
             return Action::voice;
@@ -441,7 +418,7 @@ Action UI::handle(const Input &input) {
 }
 bool UI::update_safe() const {
     return !busy && !recording && !voice_pending && !voice_working && !submitting && !uncertain &&
-           draft.empty();
+           client_id_input.empty();
 }
 void UI::update_recording_clock() {
     if (!recording_clock_)
@@ -690,7 +667,7 @@ void UI::render_reader() {
         const int body_top = dated ? 21 : 7;
         auto *clip = shape(sheet, 12, body_top, text_width, 111 - body_top, 0, face);
         std::string title;
-        auto *content = markdown_body(clip, reply.text, 0, 0, text_width, markdown_fonts_, &title);
+        auto *content = markdown_body(clip, reply.text, text_width, markdown_fonts_, title);
         if (!title.empty()) {
             auto *heading = label(sheet, title, 12, dated ? 15 : 4, text_width, ink, 34);
             if (markdown_fonts_.heading)
@@ -703,7 +680,7 @@ void UI::render_reader() {
         navigation_.measure(lv_obj_get_height(content), lv_obj_get_height(clip));
         lv_obj_set_y(content, -navigation_.offset());
     } else {
-        const auto empty = current.id.empty() ? status
+        const auto empty = thread_id.empty()  ? status
                            : busy             ? "Loading conversation..."
                            : messages.empty() ? "Hold Enter to record"
                                               : "No reply";
@@ -772,7 +749,8 @@ void UI::render() {
         label(body_, "Connect your Okou OAuth app", 8, 4, 304, ink);
         label(body_, "Public client ID (not a secret)", 8, 28, 304, muted);
         auto *field =
-            label(body_, draft.empty() ? "Type the client ID here" : draft, 8, 54, 304, ink, 38);
+            label(body_, client_id_input.empty() ? "Type the client ID here" : client_id_input, 8,
+                  54, 304, ink, 38);
         lv_obj_set_style_bg_color(field, lv_color_hex(face), 0);
         lv_obj_set_style_bg_opa(field, LV_OPA_COVER, 0);
         label(body_, status, 8, 98, 304, muted, 22);
@@ -795,8 +773,8 @@ void UI::render() {
         const std::vector<std::string> menu{"Switch workspace", "Sign out", "Refresh chat",
                                             "Return to launcher"};
         for (int i = 0; i < 4; ++i)
-            row(menu[static_cast<std::size_t>(i)], i == 0 ? org_id : "", i * 29, selected == i,
-                ink);
+            settings_row(menu[static_cast<std::size_t>(i)], i == 0 ? org_id : "", i * 29,
+                         selected == i);
         help = "Up/down select   Enter   Esc back";
     } else if (uncertain || voice_pending || submitting || status == "Network unavailable") {
         const bool retained = voice_pending && !busy;
@@ -819,11 +797,11 @@ void UI::render() {
         return;
     } else {
         render_reader();
-        if (current.id.empty())
+        if (thread_id.empty())
             help = "Ctrl+L retry   Ctrl+W settings";
         else if (!recording_overlay_ && !playback_status.empty())
             help = playback_status;
-        else if (!status.empty() && status != "Message accepted" && !current.id.empty())
+        else if (!status.empty() && status != "Message accepted")
             help = status;
         if (help.empty() || recording_overlay_)
             return;
@@ -849,10 +827,7 @@ void UI::demo(const std::string &screen) {
         verification_uri = "https://example.invalid/activate";
         status = "Demo sign-in code";
     } else {
-        Thread demo_thread;
-        demo_thread.id = "demo-thread";
-        demo_thread.title = "Cardputer Zero";
-        select_thread(demo_thread);
+        open_thread("demo-thread");
         messages = {
             {"event_1", "user", "Help me plan my day", false},
             {"event_2",
@@ -861,15 +836,15 @@ void UI::demo(const std::string &screen) {
              true,
              {},
              "2026-11-24 10:42"}};
-        if (screen == "waiting")
-            messages.push_back({"waiting", "user", "See you later", false});
-        if (screen == "sending")
+        if (screen == "sent")
+            messages.push_back({"sent", "user", "[Voice message]", false, {"demo-clip"}});
+        else if (screen == "sending")
             busy = submitting = voice_pending = true;
-        if (screen == "uncertain")
+        else if (screen == "uncertain")
             uncertain = true;
-        if (screen == "offline")
+        else if (screen == "offline")
             status = "Network unavailable";
-        if (screen == "history") {
+        else if (screen == "history") {
             messages = {
                 {"u1", "user", "Trip itinerary", false, {"demo-clip"}},
                 {"a1", "assistant", "## Before leaving\n\nCheck the route and weather.", false},
@@ -889,18 +864,17 @@ void UI::demo(const std::string &screen) {
                  false,
                  {},
                  "2026-11-24 11:08"}};
-        }
-        if (screen == "playback" || screen == "paused")
+        } else if (screen == "playback" || screen == "paused")
             playback_status =
                 screen == "paused" ? "Paused   Space resume" : "Playing   Space pause";
-        if (screen == "recording") {
+        else if (screen == "recording") {
             recording = true;
             recording_started = std::chrono::steady_clock::now();
-        }
-    }
-    if (screen == "update") {
-        page = Page::settings;
-        update_message = "v0.2.3 Ctrl+Alt+U update";
+        } else if (screen == "update") {
+            page = Page::settings;
+            update_message = "v0.2.3 Ctrl+Alt+U update";
+        } else if (screen != "chat")
+            throw std::invalid_argument("Unknown demo screen: " + screen);
     }
     selected = 0;
 }

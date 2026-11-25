@@ -17,9 +17,9 @@ int main() {
     const char *directory = ::mkdtemp(temporary);
     check(directory != nullptr);
     const std::string root(directory);
-    for (const auto *name : {"OKOU_ZERO_CONFIG", "OKOU_ZERO_API_ORIGIN", "OKOU_ZERO_OAUTH_ISSUER",
-                             "OKOU_ZERO_OAUTH_CLIENT_ID", "OKOU_ZERO_OAUTH_RESOURCE",
-                             "OKOU_ZERO_DATA_DIR", "OKOU_ZERO_SCOPES"})
+    for (const auto *name :
+         {"OKOU_ZERO_CONFIG", "OKOU_ZERO_API_ORIGIN", "OKOU_ZERO_OAUTH_ISSUER",
+          "OKOU_ZERO_OAUTH_CLIENT_ID", "OKOU_ZERO_OAUTH_RESOURCE", "OKOU_ZERO_DATA_DIR"})
         ::unsetenv(name);
     ::setenv("XDG_CONFIG_HOME", (root + "/config").c_str(), 1);
     ::setenv("XDG_DATA_HOME", (root + "/data").c_str(), 1);

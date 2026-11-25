@@ -39,9 +39,6 @@ Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl) {
             out.text = " ";
         }
         return out;
-    case KEY_ENTER:
-        out.key = Key::enter;
-        return out;
     case KEY_BACKSPACE:
         out.key = Key::backspace;
         return out;
@@ -59,9 +56,6 @@ Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl) {
         return out;
     case KEY_RIGHT:
         out.key = Key::right;
-        return out;
-    case KEY_TAB:
-        out.key = Key::tab;
         return out;
     case KEY_PAGEUP:
         out.key = Key::page_up;
@@ -96,7 +90,7 @@ Input map_key(std::uint16_t code, bool shift, bool caps, bool ctrl) {
     if (ctrl) {
         switch (code) {
         case KEY_R:
-            out.key = Key::record;
+            out.key = Key::retry_voice;
             break;
         case KEY_W:
             out.key = Key::workspace;
@@ -219,9 +213,6 @@ std::vector<Input> Keyboard::poll(bool wake_only) {
             case SDLK_RIGHT:
                 out.key = Key::right;
                 break;
-            case SDLK_TAB:
-                out.key = Key::tab;
-                break;
             case SDLK_PAGEUP:
                 out.key = Key::page_up;
                 break;
@@ -230,7 +221,7 @@ std::vector<Input> Keyboard::poll(bool wake_only) {
                 break;
             case SDLK_r:
                 if (out.ctrl)
-                    out.key = Key::record;
+                    out.key = Key::retry_voice;
                 break;
             case SDLK_w:
                 if (out.ctrl)

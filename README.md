@@ -1,32 +1,15 @@
 # Okou
 
-A native, keyboard-first Okou client for the **M5Stack Cardputer Zero**.
-C++17, LVGL, a 320×170 RGB565 framebuffer, and the device's physical keyboard.
-Independent implementation, [MIT licensed](LICENSE). The app display name is `Okou`;
-package/executable remain `okou-zero`. Official avatar assets are retained from the
-approved baseline and excluded from the code license; see [notices](THIRD_PARTY_NOTICES.md).
+A native Okou client for the **M5Stack Cardputer Zero**. It opens one conversation
+per account and workspace. Hold Enter to record, then release to send the audio.
+The folded reader shows one Markdown reply at a time, with its local send time and
+an index of earlier replies. The built-in interface is in English. Messages use
+their original language.
 
-## Status
-
-V1 implementation and automated tests are available on this branch. **Live
-account acceptance is pending the companion API change and Clerk public-client
-configuration.** Mock tests are not evidence that production login, Ably or voice
-has been accepted. See [authentication setup](docs/auth-setup.md).
-
-Implemented surfaces:
-
-- Clerk OAuth device authorization, browser-side workspace selection,
-  refresh-token rotation and local logout. No password or client secret on device.
-- One fixed conversation per account and workspace, opened at launch.
-- Chat-only Ably subscription with reconnect, token renewal and gap reconciliation.
-- Voice-only chat with a full-screen recording indicator. Hold Enter to record,
-  then release to upload the recording privately and send a voice message.
-  Uncertain deliveries are never resent automatically.
-- SDL2 desktop simulator, Linux framebuffer/evdev device backend and CPack `.deb`.
-- GitHub Actions desktop tests/screenshots and native ARM64 package/install tests.
-
-The iOS client is a **protocol/behavior reference**, not a source dependency.
-No BSL application implementation is copied into this repository.
+The device uses LVGL, a 320×170 RGB565 framebuffer and the physical keyboard.
+An SDL2 simulator runs the same reader on a development machine. The C++17
+implementation is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
+for dependencies and the official Okou launcher icons.
 
 ## Build and test on a development machine
 
@@ -34,7 +17,7 @@ Ubuntu 24.04 (amd64 or arm64):
 
 ```sh
 sudo apt-get install cmake ninja-build g++ libcurl4-openssl-dev libssl-dev \
-  zlib1g-dev libsqlite3-dev nlohmann-json3-dev libasound2-dev libasound2-plugins libpulse-dev libsdl2-dev libfreetype-dev libharfbuzz-dev fonts-noto-cjk fonts-noto-color-emoji \
+  zlib1g-dev nlohmann-json3-dev libasound2-dev libasound2-plugins libpulse-dev libsdl2-dev libfreetype-dev fonts-noto-cjk \
   python3 openssl sudo
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
 cmake --build build --parallel 2
@@ -42,72 +25,30 @@ ctest --test-dir build --output-on-failure
 ./build/okou-zero --demo
 ```
 
-Public CI uses no production accounts, secrets, conversations or microphone.
-Protocol fixtures run on loopback; UI tests use SDL's dummy video driver. Mock
-screenshots intentionally contain demo conversations, never a real account.
+The amd64 CI job builds the simulator. The native arm64 job builds the device
+backend. Both run protocol, UI and package installation tests. Each job attaches
+its Debian package and SHA-256 checksum to the run.
 
-Device packages are built by the native ARM64 CI matrix leg and
-published as the `okou-zero-<version>-arm64` artifact, with SHA-256 checksums.
-Both native amd64 (SDL2 simulator) and arm64 (device backend) builds retain
-protocol, UI, mocked updater and installed-package smoke tests. **Do not
-compile on the Cardputer.** No repository automation merges PRs or deploys a device.
+## Install and sign in
 
-## Install a CI-built package
-
-On the device, after downloading and verifying the CI artifact:
+Download the arm64 package, `manifest.json`, `manifest.sig` and `SHA256SUMS` from
+the same [official release](https://github.com/e7h4n/okou-zero/releases) into an
+empty directory. For a CI build, extract the package and checksum from the arm64
+artifact. Run these commands from that directory on the device.
 
 ```sh
 sha256sum -c SHA256SUMS
-sudo apt-get install ./okou-zero_0.2.3_arm64.deb
+sudo apt-get install ./okou-zero_*_arm64.deb
 ```
 
-The package adds an `Okou` entry in `/usr/share/APPLaunch/applications`. Start it
-through the launcher so the launcher releases framebuffer/input ownership. Do
-not run a competing foreground GUI over SSH. The app runs as the normal launcher
-user, not root, with existing video/input/audio access. No systemd GUI autostart,
-network listener or remote-control configuration is installed or changed.
+Open **Okou** from APPLaunch so the launcher hands over the framebuffer and keyboard.
+Press Enter to sign in and select the workspace on Clerk's device approval page.
+Official packages bundle the public OAuth client ID. Local builds can set it
+on the setup screen. See [authentication and configuration](docs/auth-setup.md).
 
-Configure the public OAuth client as described in [auth setup](docs/auth-setup.md).
-The app prompts for a missing public client ID; optional settings are documented
-in [the example](config/config.example.json). Store local configuration in a 0700
-directory with the file mode 0600. No client secret belongs in this file.
-
-The standard CI package bundles the public `OKOU_ZERO_OAUTH_CLIENT_ID` Variable
-from the repository's `staging` GitHub Environment. There is no separate test
-package: the default backend is `https://api.okou.ai`, its resource
-is `https://api.okou.ai/mcp`, and issuer is discovered via metadata. The bundled
-public client must belong to the production Clerk instance. Signed stable updates
-remain enabled. See [bundled defaults](docs/auth-setup.md#bundled-defaults) for
-configuration override behavior and fresh authorization after switching origins.
-Client failures emit [sanitized stderr diagnostics](docs/auth-setup.md#sanitized-failure-diagnostics)
-for the launcher's existing journal, without credentials or request/response dumps.
-
-## Signed updates
-
-Use only the [official GitHub Releases](https://github.com/e7h4n/okou-zero/releases).
-Version **0.2.2** is the native V1 signed-update baseline; **0.2.3** passed the
-real-device signed-upgrade flow ([acceptance evidence](docs/updates-acceptance.md)).
-The obsolete Hello World release `v0.1.4` was deliberately cancelled and must not
-be published or installed.
-The app checks for a stable update at launch without installing it automatically.
-Press **Ctrl+Alt+U** to explicitly confirm an offered update. The unprivileged
-updater verifies the signed manifest, version, arm64 package metadata, digest and
-size; the narrowly scoped root helper re-verifies before installation. Failure
-leaves the current app in place. See [update security and recovery](docs/updates.md).
-
-The package installs updater modules in `/usr/lib/okou-zero`, the public key in
-`/usr/share/okou-zero`, and an isolated-Python helper at
-`/usr/libexec/okou-zero-update-install`. Its root-owned `0440` sudoers rule permits
-only that helper with **no arguments** for the sudo group, not arbitrary commands.
-Runtime dependencies include Python 3, OpenSSL and sudo alongside native V1 dependencies.
-
-Trusted repository `main` CI increments the patch version and publishes only after **both** native architecture
-builds, tests and package-install/render/removal checks pass. Release metadata must
-match the configured CMake version and package. The release-only
-`OKOU_UPDATE_SIGNING_KEY` secret signs `manifest.json`; CI verifies the signature
-against the bundled public key before tagging the tested commit and creating the release, which also contains
-`manifest.sig`, the arm64 `.deb` and `SHA256SUMS`. Existing releases are never
-replaced. Public CI tests mock updater network calls and never install a real update.
+At launch, Okou checks for a newer signed release. Press **Ctrl+Alt+U** to install
+an offered update. The root helper rechecks the signature, package identity,
+version and contents before installing. See [signed updates and recovery](docs/updates.md).
 
 ## Keyboard
 
@@ -134,30 +75,19 @@ an update keep the screen awake. When idle, the backlight turns off and drawing
 pauses while messages continue to arrive. Press any key once to restore the
 previous brightness. A reply to a message sent from this device also wakes the screen.
 
-Workspace switching signs out and starts a new device grant; select the new
-organization in Clerk's browser approval page. The client never changes an
-organization ID locally to manufacture access. Unsupported rich approvals direct
-you to `app.okou.ai`; this client never approves them implicitly.
+Workspace switching signs out and starts a new device grant. Select the other
+organization on Clerk's browser approval page.
 
-## Limits and acceptance boundaries
+## Conversation storage
 
-- The list shows at most 128 recent visible threads and 128 projects. Conversation
-  state retains a bounded recent window; oversized archives fail explicitly rather
-  than exhausting device memory. See [protocol notes](docs/protocol.md).
-- Typed drafts and recoverable audio remain in process memory, not on disk, and
-  are cleared on account transition. Voice failures retain bounded in-memory
-  progress for explicit retry; exiting/crashing loses that recovery state.
-  Tokens and pending-send identities use private files. Unix permissions are not
-  protection against root or theft of an unencrypted SD card.
-- A successful HTTP submission means accepted, not run completion. An uncertain
-  submission stays blocked until its stable event identity is found in durable
-  history. Never delete its record and resend without checking the web conversation.
-- The framebuffer/keyboard and actual ES8389 microphone require physical acceptance.
-  Unit tests do not certify input routing, microphone quality or device memory.
-- Version 0.2.0 supersedes the separately accepted 0.1.0 Hello World baseline;
-  [its historical acceptance record](docs/hello-world-acceptance.md) is preserved.
-- See [design and API dependencies](docs/design-review.md),
-  [realtime behavior](docs/realtime.md), and [third-party licenses](THIRD_PARTY_NOTICES.md).
+The client retains a bounded window of conversation history. Failed uploads keep
+the recording in memory for explicit retry. If an upload has completed, retry
+reuses its file ID. Exiting the app loses this in-memory recovery state.
+
+Before sending, the client writes a private identity record scoped to the account,
+workspace, API origin and thread. An ambiguous response blocks further sends
+until the matching input appears in validated history. The record survives an
+app restart. See [the client protocol](docs/protocol.md).
 
 ## References
 

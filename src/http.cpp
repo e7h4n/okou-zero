@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "okou/core.hpp"
 #include "okou/diagnostics.hpp"
-#ifndef OKOU_ZERO_VERSION
-#define OKOU_ZERO_VERSION "dev"
-#endif
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -133,8 +130,7 @@ std::string Http::encode(const std::string &value) {
 }
 HttpResponse Http::request(const std::string &method, const std::string &url, std::string_view body,
                            const std::string &bearer,
-                           const std::map<std::string, std::string> &headers,
-                           const std::vector<UploadPart> &parts, std::FILE *output,
+                           const std::map<std::string, std::string> &headers, std::FILE *output,
                            std::size_t body_limit) {
     static CurlGlobal global;
     if (cancelled_ && cancelled_->load())
@@ -225,11 +221,7 @@ HttpResponse Http::request(const std::string &method, const std::string &url, st
     curl_easy_setopt(curl.get(), CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 0L);
-#if LIBCURL_VERSION_NUM >= 0x075500
     curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "https,http");
-#else
-    curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS, CURLPROTO_HTTPS | CURLPROTO_HTTP);
-#endif
     curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 10000L);
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, 60000L);
     curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_LIMIT, 1L);
@@ -243,25 +235,7 @@ HttpResponse Http::request(const std::string &method, const std::string &url, st
     curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, progress);
     curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, cancelled_);
-    std::unique_ptr<curl_mime, decltype(&curl_mime_free)> mime(nullptr, curl_mime_free);
-    if (!parts.empty()) {
-        if (!body.empty())
-            throw HttpError(0, "Body and multipart cannot be combined");
-        mime.reset(curl_mime_init(curl.get()));
-        if (!mime)
-            throw HttpError(0, "Multipart initialization failed");
-        for (const auto &p : parts) {
-            if (bad_header(p.name) || bad_header(p.filename) || bad_header(p.content_type))
-                throw HttpError(0, "Invalid multipart metadata");
-            auto *item = curl_mime_addpart(mime.get());
-            if (!item || curl_mime_name(item, p.name.c_str()) ||
-                curl_mime_data(item, p.value.data(), p.value.size()) ||
-                (!p.filename.empty() && curl_mime_filename(item, p.filename.c_str())) ||
-                (!p.content_type.empty() && curl_mime_type(item, p.content_type.c_str())))
-                throw HttpError(0, "Multipart allocation failed");
-        }
-        curl_easy_setopt(curl.get(), CURLOPT_MIMEPOST, mime.get());
-    } else if (writing || !body.empty()) {
+    if (writing || !body.empty()) {
         curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.empty() ? "" : body.data());
         curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE_LARGE,
                          static_cast<curl_off_t>(body.size()));

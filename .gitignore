@@ -7,4 +7,5 @@ __pycache__/
 *.pem
 credentials.json
 tokens.json
-pending-sends.json
+pending-*.json
+fixed-chat-*.json

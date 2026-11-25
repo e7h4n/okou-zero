@@ -3,9 +3,6 @@
 #include <cstdio>
 #include <cstring>
 #include <curl/curl.h>
-#ifndef OKOU_ZERO_VERSION
-#define OKOU_ZERO_VERSION "dev"
-#endif
 
 namespace okou::diagnostics {
 const char *oauth_error_code(std::string_view code) noexcept {
@@ -62,8 +59,6 @@ const char *stage_name(Stage stage) noexcept {
         return "logout_revocation";
     case Stage::application:
         return "application";
-    case Stage::chat_send:
-        return "chat_send";
     case Stage::voice:
         return "voice";
     case Stage::startup:
@@ -121,10 +116,7 @@ const char *reason(const std::exception &error) noexcept {
         {"Cannot reserve pending send identity", "send_reservation_failed"},
         {"Cannot persist pending send identity", "send_identity_write_failed"},
         {"Cannot durably persist pending send identity", "send_identity_sync_failed"},
-        {"Enter a bounded nonempty message", "invalid_message_size"},
         {"Secure random source unavailable", "random_source_unavailable"},
-        {"Dictation transcription failed; retry explicitly", "voice_transcription_failed"},
-        {"Dictation polishing failed; retry explicitly", "voice_polish_failed"},
         {"Request cancelled", "cancelled"},
         {"Invalid HTTP method", "invalid_http_method"},
         {"Invalid request URL", "invalid_request_url"},
@@ -133,10 +125,6 @@ const char *reason(const std::exception &error) noexcept {
         {"HTTP header allocation failed", "header_allocation_failed"},
         {"Invalid request header", "invalid_request_header"},
         {"Reserved request header", "reserved_request_header"},
-        {"Body and multipart cannot be combined", "conflicting_request_body"},
-        {"Multipart initialization failed", "multipart_initialization_failed"},
-        {"Invalid multipart metadata", "invalid_multipart_metadata"},
-        {"Multipart allocation failed", "multipart_allocation_failed"},
         {"Response exceeds size limit", "response_size_limit"},
         {"Request timed out", "timeout"},
         {"Network or TLS request failed", "network_or_tls_failed"},
