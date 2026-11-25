@@ -126,7 +126,33 @@ class Server {
                 Response r;
                 try {
                     auto req = read_request(fd);
-                    r = steps_.at(done_)(req);
+                    if (req.target == "/mcp") {
+                        check(req.method == "POST" &&
+                                  req.headers.at("accept") == "application/json, text/event-stream",
+                              "streamable HTTP request");
+                        auto rpc = Json::parse(req.body);
+                        const auto &params = rpc.at("params");
+                        check(
+                            rpc.at("jsonrpc") == "2.0" && rpc.at("method") == "tools/call" &&
+                                params.at("name") == req.headers.at("mcp-name") &&
+                                params.at("_meta").at("io.modelcontextprotocol/protocolVersion") ==
+                                    req.headers.at("mcp-protocol-version"),
+                            "MCP envelope");
+                        req.target = params.at("name");
+                        req.body = params.at("arguments").dump();
+                        r = steps_.at(done_)(req);
+                        if (!r.drop && r.status < 500) {
+                            const auto data = Json::parse(r.body);
+                            r = json(
+                                {{"jsonrpc", "2.0"},
+                                 {"id", rpc["id"]},
+                                 {"result",
+                                  {{"structuredContent", data}, {"isError", r.status >= 400}}}});
+                        }
+                    } else {
+                        check(req.target.rfind("/storage/", 0) == 0, "unexpected HTTP route");
+                        r = steps_.at(done_)(req);
+                    }
                 } catch (...) {
                     error_ = std::current_exception();
                     r = {500, "{}", false};
@@ -171,14 +197,23 @@ void api_request(const Request &r, const std::string &method, const std::string 
     check(r.headers.count("authorization") && r.headers.at("authorization") == "Bearer " + bearer,
           "API bearer");
 }
-Step get(const std::string &path, const Json &body, int status = 200) {
+Step reply(const std::string &tool, const Json &args, const Json &body, int status = 200) {
     return [=](const Request &r) {
-        api_request(r, "GET", path);
+        api_request(r, "POST", tool);
+        check(Json::parse(r.body) == args, "tool arguments for " + tool);
         return json(body, status);
     };
 }
-std::string base() {
-    return "/api/chat-threads/" + thread_id;
+Json page_args(int n = 0, const std::string &eid = {}) {
+    Json args = {{"threadId", thread_id}, {"limit", 50}};
+    if (n) {
+        args["sinceSeqId"] = n;
+        args["sinceEventId"] = eid;
+    }
+    return args;
+}
+Step page(const Json &args, const Json &body, int status = 200) {
+    return reply("get_chat_messages", args, body, status);
 }
 Json row(int n, const std::string &type, Json payload = Json::object()) {
     return {{"id", id(n)},
@@ -194,8 +229,15 @@ Json row(int n, const std::string &type, Json payload = Json::object()) {
             {"createdAt", "2026-11-17T18:00:00Z"},
             {"payload", payload}};
 }
-Json tail(const Json &rows, int last, const std::string &last_id, bool more = false) {
+Json tail(Json rows, int last, const std::string &last_id, bool more = false) {
+    for (auto &r : rows) {
+        r["threadId"] = r.at("chatThreadId");
+        r["eventId"] = r.at("id");
+        r.erase("id");
+        r.erase("chatThreadId");
+    }
     return {
+        {"snapshot", nullptr},
         {"rows", rows},
         {"cursor",
          {{"lastSeqId", last}, {"lastEventId", last_id.empty() ? Json(nullptr) : Json(last_id)}}},
@@ -207,16 +249,6 @@ Json input(const std::string &text) {
 }
 Json voice_part() {
     return {{"type", "voice"}, {"clips", Json::array({{{"fileId", clip_id}}})}};
-}
-std::string rows_path(int n, const std::string &eid = {}) {
-    auto s = base() + "/event-rows?sinceSeqId=" + std::to_string(n) + "&limit=50";
-    return n ? s + "&sinceEventId=" + eid : s;
-}
-Step missing_snapshot() {
-    return get(
-        base() + "/event-snapshot",
-        {{"error", {{"code", "CHAT_EVENT_SNAPSHOT_NOT_FOUND"}, {"message", "Not yet archived"}}}},
-        404);
 }
 struct Fixture {
     Server server;
@@ -256,24 +288,26 @@ void history_test() {
     invalid_date["createdAt"] = "2026-02-30T00:00:00Z";
     d["revokesEventId"] = id(2);
     auto end = row(5, "run.completed");
-    f.server.start({get(base() + "/event-snapshot",
-                        {{"url", storage}, {"lastSeqId", 3}, {"lastEventId", id(3)}}),
-                    [=](const Request &r) {
-                        check(!r.headers.count("authorization"), "history storage bearer absent");
-                        check(r.target == "/storage/history?sig=keep%2Bsignature",
-                              "history signature preserved");
-                        return Response{200, a.dump() + "\n" + b.dump() + "\n" + c.dump() + "\n",
-                                        false};
-                    },
-                    get(rows_path(3, id(3)),
-                        tail(Json::array({d, end, summer, undated, invalid_date}), 8, id(8))),
-                    get(rows_path(8, id(8)), tail(Json::array(), 8, id(8)))});
+    auto first = tail(Json::array({d, end}), 5, id(5), true);
+    first["snapshot"] = {{"url", storage}, {"lastSeqId", 3}, {"lastEventId", id(3)}};
+    f.server.start(
+        {page(page_args(), first),
+         [=](const Request &r) {
+             check(!r.headers.count("authorization"), "history storage bearer absent");
+             check(r.target == "/storage/history?sig=keep%2Bsignature", "signature preserved");
+             return Response{200, a.dump() + "\n" + b.dump() + "\n" + c.dump() + "\n", false};
+         },
+         page(page_args(5, id(5)), tail(Json::array({summer, undated, invalid_date}), 8, id(8))),
+         page(page_args(8, id(8)), tail(Json::array(), 8, id(8)))});
     const char *zone = getenv("TZ");
     const std::string original_zone = zone ? zone : "";
     const bool had_zone = zone != nullptr;
     setenv("TZ", "America/Los_Angeles", 1);
     tzset();
-    auto messages = f.client().history(thread_id);
+    auto client = f.client();
+    auto messages = client.history(thread_id);
+    check(client.history(thread_id).size() == messages.size(),
+          "reattach resumes from paired cursor");
     if (had_zone)
         setenv("TZ", original_zone.c_str(), 1);
     else
@@ -307,7 +341,7 @@ void bad_history_tests() {
         Json rows = Json::array({a});
         auto reply = tail(rows, 1, id(1));
         if (mode == 0)
-            reply["rows"][0]["chatThreadId"] = other_id;
+            reply["rows"][0]["threadId"] = other_id;
         if (mode == 1)
             reply["cursor"]["lastSeqId"] = 2;
         if (mode == 2)
@@ -321,22 +355,21 @@ void bad_history_tests() {
             reply["cursor"]["lastEventId"] = nullptr;
         if (mode == 5)
             reply["rows"][0]["seqId"] = -1;
-        f.server.start({missing_snapshot(), get(rows_path(0), reply)});
+        f.server.start({page(page_args(0), reply)});
         throws([&] { f.client().history(thread_id); }, "malformed history rejected");
         f.server.finish();
     }
     {
         Fixture f;
-        f.server.start({missing_snapshot(), get(rows_path(0), {{"code", "EXPIRED"}}, 410),
-                        missing_snapshot(), get(rows_path(0), {{"code", "EXPIRED"}}, 410)});
+        f.server.start({page(page_args(0), {{"error", {{"code", "CHAT_EVENTS_EXPIRED"}}}}, 410),
+                        page(page_args(0), {{"error", {{"code", "CHAT_EVENTS_EXPIRED"}}}}, 410)});
         throws([&] { f.client().history(thread_id); }, "410 recovery bounded");
         f.server.finish();
     }
     {
         Fixture f;
-        f.server.start({missing_snapshot(), get(rows_path(0), {}, 410), missing_snapshot(),
-                        get(rows_path(0), tail(Json::array(), 0, "")),
-                        get(rows_path(0), tail(Json::array(), 0, ""))});
+        f.server.start({page(page_args(0), {{"error", {{"code", "CHAT_EVENTS_EXPIRED"}}}}, 410),
+                        page(page_args(0), tail(Json::array(), 0, ""))});
         check(f.client().history(thread_id).empty(), "410 replaced baseline succeeds");
         f.server.finish();
     }
@@ -350,11 +383,11 @@ void bad_history_tests() {
         auto payload = a.dump() + "\n" + (mode == 1 ? b.dump() + "\n" : "");
         if (mode == 2)
             payload.pop_back();
-        f.server.start(
-            {get(base() + "/event-snapshot", {{"url", storage},
-                                              {"lastSeqId", mode == 2 ? 1 : 2},
-                                              {"lastEventId", mode == 2 ? id(1) : id(2)}}),
-             [=](const Request &) { return Response{200, payload, false}; }});
+        f.server.start({page(page_args(), {{"snapshot",
+                                            {{"url", storage},
+                                             {"lastSeqId", mode == 2 ? 1 : 2},
+                                             {"lastEventId", mode == 2 ? id(1) : id(2)}}}}),
+                        [=](const Request &) { return Response{200, payload, false}; }});
         throws([&] { f.client().history(thread_id); },
                "snapshot cursor, duplicate identity, or newline invalid");
         f.server.finish();
@@ -363,33 +396,32 @@ void bad_history_tests() {
         Fixture f;
         auto a = row(1, "output.message", {{"content", "answer"}}), b = row(2, "run.failed");
         b["runId"] = other_id;
-        f.server.start({missing_snapshot(), get(rows_path(0), tail(Json::array({a, b}), 2, id(2))),
-                        get(rows_path(2, id(2)), tail(Json::array(), 2, id(2)))});
+        f.server.start({page(page_args(0), tail(Json::array({a, b}), 2, id(2)))});
         auto m = f.client().history(thread_id);
         check(m.size() == 1 && !m[0].terminal, "unrelated terminal ignored");
         f.server.finish();
     }
-}
-Json metadata() {
-    return {{"id", thread_id}, {"computerUseHostId", nullptr}, {"cloudBrowserEnabled", true}};
 }
 void fixed_thread_test() {
     Fixture f;
     std::string original, replacement;
     const auto create = [&](std::string &saved, int status) {
         return [&, status](const Request &r) {
-            api_request(r, "POST", "/api/chat-threads");
+            api_request(r, "POST", "create_chat_thread");
             auto request = Json::parse(r.body);
             const auto candidate = request.at("clientThreadId").get<std::string>();
             if (saved.empty())
                 saved = candidate;
             check(candidate == saved, "Retries reuse the reserved chat ID");
-            return json({{"id", candidate}, {"title", "Cardputer Zero"}}, status);
+            return json({{"threadId", candidate}, {"title", "Cardputer Zero"}}, status);
         };
     };
     const auto open = [&](int status) {
         return [&, status](const Request &r) {
-            api_request(r, "GET", "/api/chat-threads/" + original + "/metadata");
+            api_request(r, "POST", "get_chat_messages");
+            check(Json::parse(r.body).at("threadId") == original, "opens saved thread");
+            if (status == 404)
+                return json({{"error", {{"code", "NOT_FOUND"}}}}, 404);
             return json({{"id", original}, {"title", "Renamed"}}, status);
         };
     };
@@ -405,32 +437,25 @@ void fixed_thread_test() {
 }
 void lost_voice_acknowledgement_test() {
     Fixture f;
-    std::string sent_id, sort;
-    f.server.start(
-        {get(base() + "/metadata", metadata()),
-         [&](const Request &r) {
-             api_request(r, "POST", "/api/chat/events");
-             check(r.headers.at("content-type") == "application/json", "JSON content type");
-             auto j = Json::parse(r.body);
-             sent_id = j.at("clientEventId");
-             sort = j.at("chatThreadSortEventId");
-             check(j.at("computerUseHostId").is_null() && j.at("cloudBrowserEnabled") == true,
-                   "metadata settings preserved");
-             return Response{200, "", true};
-         },
-         missing_snapshot(),
-         [&](const Request &r) {
-             api_request(r, "GET", rows_path(0));
-             auto a =
-                 row(1, "input.prompt",
-                     {{"userMessage", {{"version", 1}, {"parts", Json::array({voice_part()})}}}});
-             a["revokesEventId"] = sent_id;
-             return json(tail(Json::array({a}), 1, id(1)));
-         },
-         [&](const Request &r) {
-             api_request(r, "GET", rows_path(1, id(1)));
-             return json(tail(Json::array(), 1, id(1)));
-         }});
+    std::string sent_id;
+    f.server.start({
+        [&](const Request &r) {
+            api_request(r, "POST", "send_chat_message");
+            check(r.headers.at("content-type") == "application/json", "JSON content type");
+            auto j = Json::parse(r.body);
+            sent_id = j.at("clientEventId");
+            return Response{200, "", true};
+        },
+        [&](const Request &r) {
+            api_request(r, "POST", "get_chat_messages");
+            check(Json::parse(r.body) == page_args(0), "history cursor");
+            auto a =
+                row(1, "input.prompt",
+                    {{"userMessage", {{"version", 1}, {"parts", Json::array({voice_part()})}}}});
+            a["revokesEventId"] = sent_id;
+            return json(tail(Json::array({a}), 1, id(1)));
+        },
+    });
     auto c = f.client();
     auto first = c.send_voice(thread_id, clip_id);
     check(first.uncertain && !first.client_event_id.empty(), "dropped write uncertain");
@@ -442,9 +467,7 @@ void lost_voice_acknowledgement_test() {
         check(contents.find(clip_id) == std::string::npos &&
                   contents.find(bearer) == std::string::npos,
               "no audio reference or token persisted");
-        check(contents.find(sent_id) != std::string::npos &&
-                  contents.find(sort) != std::string::npos,
-              "both identities persisted");
+        check(contents.find(sent_id) != std::string::npos, "send identity persisted");
         struct stat st {};
         ::stat(e.path().c_str(), &st);
         check((st.st_mode & 077) == 0, "pending mode private");
@@ -461,15 +484,14 @@ void lost_voice_acknowledgement_test() {
 void send_identity_test() {
     Fixture f;
     std::string pending;
-    f.server.start({get(base() + "/metadata", metadata()),
-                    [&](const Request &r) {
-                        api_request(r, "POST", "/api/chat/events");
+    f.server.start({[&](const Request &r) {
+                        api_request(r, "POST", "send_chat_message");
                         pending = Json::parse(r.body).at("clientEventId");
                         return json({{"threadId", other_id}});
                     },
-                    missing_snapshot(),
                     [&](const Request &r) {
-                        api_request(r, "GET", rows_path(0));
+                        api_request(r, "POST", "get_chat_messages");
+                        check(Json::parse(r.body) == page_args(0), "history cursor");
                         auto a = row(1, "input.prompt",
                                      {{"userMessage",
                                        {{"version", 1}, {"parts", Json::array({voice_part()})}}}});
@@ -492,8 +514,7 @@ void assistant_content_test() {
     auto rows = Json::array({row(1, "output.message", {{"content", markdown}}),
                              row(2, "output.message", {{"content", json_answer}}),
                              row(3, "output.message", {{"content", link}})});
-    f.server.start({missing_snapshot(), get(rows_path(0), tail(rows, 3, id(3))),
-                    get(rows_path(3, id(3)), tail(Json::array(), 3, id(3)))});
+    f.server.start({page(page_args(0), tail(rows, 3, id(3)))});
     auto messages = f.client().history(thread_id);
     check(messages.size() == 3 && messages[0].text == markdown && messages[1].text == json_answer,
           "Markdown and literal JSON answers retain the assistant's words");
@@ -504,14 +525,12 @@ void assistant_content_test() {
 }
 void send_rejection_test() {
     Fixture f;
-    f.server.start({get(base() + "/metadata", metadata()),
-                    [](const Request &r) {
-                        api_request(r, "POST", "/api/chat/events");
-                        return json({{"error", {{"code", "BAD_INPUT"}}}}, 400);
+    f.server.start({[](const Request &r) {
+                        api_request(r, "POST", "send_chat_message");
+                        return json({{"error", {{"code", "BAD_REQUEST"}}}}, 400);
                     },
-                    get(base() + "/metadata", metadata()),
                     [](const Request &r) {
-                        api_request(r, "POST", "/api/chat/events");
+                        api_request(r, "POST", "send_chat_message");
                         return json({{"error", {{"code", "CONFLICT"}}}}, 409);
                     }});
     auto c = f.client();
@@ -524,13 +543,11 @@ void send_rejection_test() {
 void uncertain_absence_test() {
     Fixture f;
     std::string pending;
-    f.server.start({get(base() + "/metadata", metadata()),
-                    [&](const Request &r) {
+    f.server.start({[&](const Request &r) {
                         pending = Json::parse(r.body).at("clientEventId");
                         return json({}, 503);
                     },
-                    missing_snapshot(), get(rows_path(0), tail(Json::array(), 0, "")),
-                    get(rows_path(0), tail(Json::array(), 0, ""))});
+                    page(page_args(0), tail(Json::array(), 0, ""))});
     auto first = f.client().send_voice(thread_id, clip_id);
     f.client().history(thread_id);
     auto again = f.client().send_voice(thread_id, clip_id);
@@ -553,9 +570,8 @@ void voice_history_test() {
     // An independent send of the same clip remains a separate user message.
     auto rows = Json::array({queued, promoted, row(3, "input.prompt", payload)});
     const auto url = f.server.origin() + "/storage/voice?signature=private";
-    f.server.start({missing_snapshot(), get(rows_path(0), tail(rows, 3, id(3))),
-                    get(rows_path(3, id(3)), tail(Json::array(), 3, id(3))),
-                    get("/api/voice/clips/" + clip_id + "/playback", {{"url", url}})});
+    f.server.start({page(page_args(0), tail(rows, 3, id(3))),
+                    reply("get_voice_playback_url", {{"fileId", clip_id}}, {{"url", url}})});
     auto client = f.client();
     auto messages = client.history(thread_id);
     check(messages.size() == 2 && messages[0].id == id(1) && messages[1].id == id(3) &&
@@ -570,10 +586,8 @@ void voice_message_test() {
     const auto upload_url = f.server.origin() + "/storage/voice?signature=a%2Bb";
     f.server.start({
         [&](const Request &r) {
-            api_request(r, "POST", "/api/uploads/prepare/private");
-            check(Json::parse(r.body) == Json({{"filename", "recording.wav"},
-                                               {"contentType", "audio/wav"},
-                                               {"size", 48}}),
+            api_request(r, "POST", "prepare_voice_upload");
+            check(Json::parse(r.body) == Json({{"filename", "recording.wav"}, {"size", 48}}),
                   "prepare private WAV");
             return json({{"id", clip_id},
                          {"uploadUrl", upload_url},
@@ -591,25 +605,24 @@ void voice_message_test() {
             return json({});
         },
         [&](const Request &r) {
-            api_request(r, "POST", "/api/uploads/complete");
+            api_request(r, "POST", "complete_voice_upload");
             check(Json::parse(r.body).at("id") == clip_id, "complete uploaded file");
             return json({{"id", clip_id}});
         },
-        get(base() + "/metadata", metadata()),
         [&](const Request &r) {
-            api_request(r, "POST", "/api/chat/events");
+            api_request(r, "POST", "send_chat_message");
             auto body = Json::parse(r.body);
             const auto &message = body.at("userMessage");
             const auto &parts = message.at("parts");
-            check(body.at("threadId") == thread_id && body.at("hasTextContent") == false &&
-                      body.at("prompt") == "(see message parts)" && message.at("version") == 1 &&
-                      parts.size() == 2 && parts.at(0) == voice_part(),
+            check(body.at("threadId") == thread_id && !body.contains("prompt") &&
+                      message.at("version") == 1 && parts.size() == 2 &&
+                      parts.at(0) == voice_part(),
                   "send the recording to the fixed chat");
             check(parts.at(1).at("type") == "additional_info" &&
                       parts.at(1).at("text").get<std::string>().find("Cardputer Zero") !=
                           std::string::npos,
                   "send the reader context as hidden message metadata");
-            return json({{"threadId", thread_id}});
+            return json({{"threadId", thread_id}, {"eventId", body.at("clientEventId")}});
         },
     });
     auto c = f.client();
@@ -625,7 +638,7 @@ void token_test() {
                   {"clientId", "user"},   {"timestamp", 123456},
                   {"ttl", 60000}};
     f.server.start({[=](const Request &r) {
-        api_request(r, "POST", "/api/realtime/token");
+        api_request(r, "POST", "get_chat_realtime_token");
         check(Json::parse(r.body) == Json::object(), "realtime empty object");
         return json(token);
     }});
@@ -639,8 +652,9 @@ void security_test() {
         std::string url = mode == 0   ? "http://example.com/secret?sig=x"
                           : mode == 1 ? "https://user:password@example.com/secret"
                                       : "https://example.com/secret#fragment";
-        f.server.start({get(base() + "/event-snapshot",
-                            {{"url", url}, {"lastSeqId", 0}, {"lastEventId", nullptr}})});
+        f.server.start(
+            {page(page_args(),
+                  {{"snapshot", {{"url", url}, {"lastSeqId", 0}, {"lastEventId", nullptr}}}})});
         throws([&] { f.client().history(thread_id); }, "unsafe snapshot URL rejected");
         f.server.finish();
     }

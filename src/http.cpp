@@ -155,13 +155,29 @@ HttpResponse Http::request(const std::string &method, const std::string &url, st
     auto scheme = part(CURLUPART_SCHEME), host = part(CURLUPART_HOST);
     const char *fixture = std::getenv("OKOU_ZERO_TEST_ALLOW_LOOPBACK_HTTP");
     bool loopback = host == "127.0.0.1" || host == "[::1]" || host == "::1";
-    if ((scheme != "https" &&
-         !(scheme == "http" && loopback && fixture && std::string(fixture) == "1")) ||
+    const bool local_fixture = loopback && fixture && std::string_view(fixture) == "1";
+    if ((scheme != "https" && !(scheme == "http" && local_fixture)) ||
         !part(CURLUPART_USER).empty() || !part(CURLUPART_PASSWORD).empty() ||
         !part(CURLUPART_FRAGMENT).empty())
         throw HttpError(0, "HTTPS URL without credentials required");
     if (bad_header(bearer) || bearer.size() > 64 * 1024)
         throw HttpError(0, "Invalid authorization header");
+    if (!bearer.empty()) {
+        const bool mcp =
+            url == std::string(build::api_origin) + "/mcp" ||
+            (local_fixture && part(CURLUPART_PATH) == "/mcp" && part(CURLUPART_QUERY).empty());
+        if (method != "POST" || !mcp)
+            throw HttpError(0, "Okou access tokens require the MCP endpoint");
+    }
+    if (method == "PUT" && !local_fixture) {
+        // Voice uploads use the R2 S3 API URL signed by prepare_voice_upload.
+        constexpr std::string_view suffix = ".r2.cloudflarestorage.com";
+        const auto port = part(CURLUPART_PORT);
+        if (host.size() <= suffix.size() ||
+            host.compare(host.size() - suffix.size(), suffix.size(), suffix) != 0 ||
+            (!port.empty() && port != "443"))
+            throw HttpError(0, "Voice uploads require an R2 endpoint");
+    }
     std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
     if (!curl)
         throw HttpError(0, "HTTP initialization failed");
@@ -181,7 +197,8 @@ HttpResponse Http::request(const std::string &method, const std::string &url, st
             throw HttpError(0, "HTTP header allocation failed");
         list = next;
     };
-    add("Accept: application/json");
+    if (!headers.count("Accept"))
+        add("Accept: application/json");
     if (!bearer.empty()) {
         add("Authorization: Bearer " + bearer);
         add("X-Client-Type: OkouZero");

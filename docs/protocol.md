@@ -1,21 +1,34 @@
 # Cardputer Zero client protocol
 
+## Network endpoints
+
+All authenticated Okou chat operations use `POST https://api.okou.ai/mcp`. This
+is the only production endpoint that receives an Okou bearer authorization header.
+The device uploads WAVs to an HTTPS Cloudflare R2 endpoint returned by `prepare_voice_upload`.
+Snapshot and playback downloads use signed GET URLs supplied by MCP. File transfers
+carry no Okou access token and do not follow redirects.
+
+Device sign-in, token renewal and revocation use the [OAuth endpoints](auth-setup.md).
+Realtime delivery uses Ably. The standalone package checks GitHub for
+[signed updates](updates.md). The Store edition receives updates through the launcher.
+
 ## Fixed conversation
 
 The first launch for an account and workspace reserves a UUID in private storage, then
-posts it as `clientThreadId` to `/api/chat-threads` with the title `Cardputer Zero`.
-A retry reuses that reservation. Later launches load the saved thread's metadata.
-Only a 404 or 410 on an established thread allows the client to create a replacement.
+calls the MCP tool `create_chat_thread` with that `clientThreadId` with the title `Cardputer Zero`.
+A retry reuses that reservation. Later launches check the saved thread with `get_chat_messages`.
+Only the tool's explicit not-found result permits replacing an established thread.
 The binding includes the API origin, user and organization.
 
 ## History and reader
 
-The client fetches `/api/chat-threads/<id>/event-snapshot` and reads the signed
-NDJSON archive without sending OAuth or client headers to storage. A canonical
-`CHAT_EVENT_SNAPSHOT_NOT_FOUND` starts history at sequence zero. The client follows
-`event-rows` using the sequence and event ID from the same cursor. It validates the
-thread, strict ordering and final cursor before publishing history. An expired cursor
-permits one rebuild. Limits are 8,192 events per reconstruction, 200 recent rows for
+The first `get_chat_messages` call returns a snapshot pointer and the first page
+of event rows together. The client reads a signed NDJSON archive without OAuth
+or client headers, then applies the inline rows. While more pages are available it
+continues with the matching sequence and event ID. It validates thread identity,
+strict ordering and the returned cursor before committing its in-memory history.
+After an Ably notification or reattach, it resumes from that cursor. An expired
+cursor permits one rebuild. Limits are 8,192 events per reconstruction, 200 recent rows for
 presentation and 32 KiB of text per message.
 
 Assistant `output.message.payload.content` is Markdown, including literal code and
@@ -35,30 +48,26 @@ Holding Enter captures 16 kHz mono PCM16 through the configured ALSA device
 350 ms sends the recording. Shorter taps discard it. The waveform uses the captured
 sample peaks.
 
-1. Prepare a private WAV upload with `POST /api/uploads/prepare/private`.
-2. PUT the WAV to the signed storage URL with the supplied upload headers and
-   complete the upload with `POST /api/uploads/complete`.
-3. Read the fixed thread's metadata to preserve its computer host and browser settings.
-   Submit `POST /api/chat/events` with the thread ID, a version-1 user message
-   containing a voice part with `clips: [{fileId}]` and an `additional_info` part describing
-   the handheld reader's screen capacity, Markdown support and link limitations. Only the
-   voice part appears in the conversation. The request uses `hasTextContent: false` and
-   the protocol prompt `(see message parts)`.
+1. Call `prepare_voice_upload` with the WAV filename and byte count.
+2. PUT the audio to the signed URL with its upload headers and call `complete_voice_upload`.
+3. Call `send_chat_message` with the fixed thread ID, a durable `clientEventId`
+   and a version-1 `userMessage`. Its voice part carries the clip file ID and its
+   additional-info part describes the handheld reader.
 
-Before submission the client durably reserves both event UUIDs in an account- and
-thread-scoped file. A matching successful response clears the reservation. Definite
+Before submission the client persists the event ID in the existing private
+account- and thread-scoped ledger. A matching successful response clears the reservation. Definite
 4xx rejections also clear it, except 408 and 409. An ambiguous response keeps the
 reservation across restarts. A complete, validated history read releases it after
 finding the matching input ID or its promotion.
 
 An acknowledged recording is playable immediately. Space selects clips associated
 with the current reply or a newly sent recording. Playback obtains a signed URL from
-`GET /api/voice/clips/<fileId>/playback`, spools the WAV to disk and plays it through
+`get_voice_playback_url`, spools the WAV to disk and plays it through
 PulseAudio. Pause and resume keep the playback position.
 
 ## Realtime
 
-The client exchanges the signed TokenRequest from `POST /api/realtime/token` with
+The client exchanges the signed TokenRequest from `get_chat_realtime_token` with
 Ably. Its WebSocket uses protocol v6 and attaches in subscribe mode to
 `user-org:<user>:<org>`. Attaching, losing channel continuity, or receiving
 `chatThreadMessageCreated:<id>` or `chatThreadDetailChanged:<id>` for the fixed

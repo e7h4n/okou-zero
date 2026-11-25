@@ -170,15 +170,18 @@ Json visible_row(const Json &row) {
     safe["payload"] = std::move(payload);
     return safe;
 }
-std::string tid(const std::string &id) {
+void validate_thread(const std::string &id) {
     if (!is_uuid(id))
         throw std::runtime_error("Invalid thread identity");
-    return "/api/chat-threads/" + id;
 }
 void cursor(std::int64_t n, const std::string &id) {
     if ((n == 0 && !id.empty()) || (n > 0 && !is_uuid(id)))
         invalid();
 }
+class MissingToolResource final : public HttpError {
+  public:
+    MissingToolResource() : HttpError(404, "Resource unavailable") {}
+};
 Json parsed(const std::string &s) {
     try {
         return Json::parse(s);
@@ -259,7 +262,7 @@ Json load_pending(const std::string &path) {
     if (n < 0 || n > 2048)
         invalid();
     auto j = parsed(std::string(b, static_cast<std::size_t>(n)));
-    if (!is_uuid(str(j, "clientEventId")) || !is_uuid(str(j, "chatThreadSortEventId")))
+    if (!is_uuid(str(j, "clientEventId")))
         invalid();
     return j;
 }
@@ -268,15 +271,23 @@ struct History {
     std::vector<Json> rows;
     bool found = false;
 };
-History read_history(const std::string &thread, const Fetch &api, const Fetch &archive,
-                     const std::string &looking) {
-    const auto base = tid(thread);
+History read_history(const std::string &thread, const std::function<Json(Json)> &page,
+                     const Fetch &archive, const std::string &looking,
+                     const std::vector<Json> &cached) {
+    validate_thread(thread);
     for (int attempt = 0; attempt < 2; ++attempt) {
         History out;
         std::int64_t n = 0;
         std::string id;
         std::set<std::string> seen;
         std::size_t count = 0;
+        if (attempt == 0 && !cached.empty()) {
+            out.rows = cached;
+            n = seq(cached.back(), "seqId");
+            id = str(cached.back(), "id");
+            for (const auto &row : cached)
+                seen.insert(str(row, "id"));
+        }
         auto consume = [&](const Json &row) {
             auto next = seq(row, "seqId");
             auto rid = str(row, "id");
@@ -298,15 +309,17 @@ History read_history(const std::string &thread, const Fetch &api, const Fetch &a
                 out.rows.erase(out.rows.begin());
         };
         try {
-            Json baseline;
-            try {
-                baseline = api(base + "/event-snapshot");
-            } catch (const HttpError &e) {
-                // api() preserves the one documented absence code through its message.
-                if (e.status != 404 || std::string(e.what()) != "CHAT_EVENT_SNAPSHOT_NOT_FOUND")
-                    throw;
-            }
-            if (!baseline.is_null()) {
+            Json args = {{"threadId", thread}, {"limit", 50}};
+            auto next_page = [&] {
+                if (n) {
+                    args["sinceSeqId"] = n;
+                    args["sinceEventId"] = id;
+                }
+                return page(args);
+            };
+            auto p = next_page();
+            const auto &baseline = p.at("snapshot");
+            if (n == 0 && !baseline.is_null()) {
                 auto end = seq(baseline, "lastSeqId");
                 auto eid = str(baseline, "lastEventId");
                 cursor(end, eid);
@@ -318,31 +331,25 @@ History read_history(const std::string &thread, const Fetch &api, const Fetch &a
                 if (n != end || id != eid)
                     invalid();
             }
-            bool confirm = true;
-            for (std::size_t page = 0; page < max_events; ++page) {
-                auto path = base + "/event-rows?sinceSeqId=" + std::to_string(n) + "&limit=50";
-                if (n)
-                    path += "&sinceEventId=" + Http::encode(id);
-                auto p = api(path);
+            for (std::size_t pages = 0; pages < max_events; ++pages) {
                 auto rows = p.at("rows");
                 if (!rows.is_array() || rows.size() > 50)
                     invalid();
                 bool more = flag(p, "hasMore");
                 if (more && rows.empty())
                     invalid();
-                for (const auto &row : rows)
+                for (auto &row : rows) {
+                    row["id"] = row.at("eventId");
+                    row["chatThreadId"] = row.at("threadId");
                     consume(row);
+                }
                 auto c = p.at("cursor");
                 cursor(seq(c, "lastSeqId"), str(c, "lastEventId"));
                 if (seq(c, "lastSeqId") != n || str(c, "lastEventId") != id)
                     invalid();
-                if (!more) {
-                    if (confirm) {
-                        confirm = false;
-                        continue;
-                    }
+                if (!more)
                     return out;
-                }
+                p = next_page();
             }
             invalid();
         } catch (const HttpError &e) {
@@ -438,26 +445,77 @@ std::vector<Message> present(const History &h) {
 Client::Client(Config config, Http &http, Tokens tokens)
     : config_(std::move(config)), http_(http), tokens_(std::move(tokens)) {}
 void Client::set_tokens(Tokens tokens) {
+    if (tokens.user_id != tokens_.user_id || tokens.org_id != tokens_.org_id) {
+        history_thread_.clear();
+        history_rows_.clear();
+    }
     tokens_ = std::move(tokens);
 }
-Json Client::api(const std::string &method, const std::string &path, const Json &body) {
-    if (path.rfind("/api/", 0) != 0)
-        throw std::runtime_error("Invalid API path");
-    std::map<std::string, std::string> headers = {{"Accept", "application/json"}};
-    if (!body.is_null())
-        headers["Content-Type"] = "application/json";
-    auto r = http_.request(method, config_.api_origin + path, body.is_null() ? "" : body.dump(),
-                           tokens_.access_token, headers);
-    if (r.status == 404) {
-        auto j = Json::parse(r.body, nullptr, false);
-        if (j.is_object() && j.contains("error") && j["error"].is_object() &&
-            str(j["error"], "code") == "CHAT_EVENT_SNAPSHOT_NOT_FOUND")
-            throw HttpError(404, "CHAT_EVENT_SNAPSHOT_NOT_FOUND");
-    }
+Json Client::tool(const std::string &name, Json arguments) {
+    constexpr char version[] = "2026-07-28";
+    const auto id = uuid();
+    const Json meta = {{"io.modelcontextprotocol/protocolVersion", version},
+                       {"io.modelcontextprotocol/clientCapabilities", Json::object()},
+                       {"io.modelcontextprotocol/clientInfo",
+                        {{"name", "okou-zero"}, {"version", OKOU_ZERO_VERSION}}}};
+    const Json request = {
+        {"jsonrpc", "2.0"},
+        {"id", id},
+        {"method", "tools/call"},
+        {"params", {{"name", name}, {"arguments", std::move(arguments)}, {"_meta", meta}}}};
+    const auto r =
+        http_.request("POST", config_.api_origin + "/mcp", request.dump(), tokens_.access_token,
+                      {{"Accept", "application/json, text/event-stream"},
+                       {"Content-Type", "application/json"},
+                       {"MCP-Protocol-Version", version},
+                       {"MCP-Method", "tools/call"},
+                       {"MCP-Name", name}});
     success(r);
-    if (r.status == 204)
-        return nullptr;
-    return parsed(r.body);
+    auto decode = [&](const Json &reply) -> Json {
+        if (str(reply, "jsonrpc") != "2.0" || str(reply, "id") != id || !reply.contains("result"))
+            invalid();
+        const auto &result = reply.at("result");
+        if (!result.contains("structuredContent"))
+            invalid();
+        const auto &data = result.at("structuredContent");
+        if (!data.is_object())
+            invalid();
+        if (result.value("isError", false)) {
+            const auto code = str(data.value("error", Json::object()), "code");
+            if (code == "NOT_FOUND")
+                throw MissingToolResource();
+            if (code == "CHAT_EVENTS_EXPIRED")
+                throw HttpError(410, "History cursor expired");
+            if (code == "CONFLICT")
+                throw HttpError(409, "Conflicting input");
+            if (code == "BAD_REQUEST" || code == "FORBIDDEN" || code == "UNAUTHORIZED")
+                throw HttpError(code == "BAD_REQUEST" ? 400
+                                : code == "FORBIDDEN" ? 403
+                                                      : 401,
+                                "Tool request rejected");
+            throw HttpError(0, "MCP tool failed", true);
+        }
+        return data;
+    };
+    const auto ct = r.headers.find("content-type");
+    if (ct != r.headers.end() && ct->second.rfind("text/event-stream", 0) == 0) {
+        std::istringstream stream(r.body);
+        std::string line, data;
+        while (std::getline(stream, line)) {
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            if (line.empty() && !data.empty()) {
+                auto message = parsed(data);
+                if (message.contains("id") && message["id"] == id)
+                    return decode(message);
+                data.clear();
+            } else if (line.rfind("data:", 0) == 0) {
+                data += line.substr(5) + "\n";
+            }
+        }
+        invalid();
+    }
+    return decode(parsed(r.body));
 }
 Json Client::history_snapshot(const std::string &url) {
     // Signed URL is passed byte-for-byte. No bearer or client headers, no redirects (Http).
@@ -506,17 +564,15 @@ std::string Client::fixed_thread_id() {
     auto id = str(record, "threadId");
     const bool ready = flag(record, "ready");
     const auto check_id = [&](const Json &body) {
-        if (str(body, "id") != id)
+        if (str(body, "threadId") != id)
             invalid();
     };
     if (is_uuid(id) && ready) {
         try {
-            check_id(api("GET", tid(id) + "/metadata"));
+            tool("get_chat_messages", {{"threadId", id}, {"limit", 1}});
             return id;
-        } catch (const HttpError &error) {
-            // Only an authoritative miss permits replacing the selected chat.
-            if (error.status != 404 && error.status != 410)
-                throw;
+        } catch (const MissingToolResource &) {
+            // Only the tool can confirm that the bound thread disappeared.
         }
         id.clear();
     }
@@ -526,8 +582,7 @@ std::string Client::fixed_thread_id() {
         // request whose response may be lost, including across restarts.
         detail::write_private(path, {{"threadId", id}, {"ready", false}});
     }
-    check_id(
-        api("POST", "/api/chat-threads", {{"clientThreadId", id}, {"title", "Cardputer Zero"}}));
+    check_id(tool("create_chat_thread", {{"clientThreadId", id}, {"title", "Cardputer Zero"}}));
     detail::write_private(path, {{"threadId", id}, {"ready", true}});
     return id;
 }
@@ -538,15 +593,19 @@ std::vector<Message> Client::history(const std::string &thread) {
         invalid();
     auto looking = pending.is_null() ? std::string() : str(pending, "clientEventId");
     auto result = read_history(
-        thread, [&](const std::string &p) { return api("GET", p); },
-        [&](const std::string &u) { return history_snapshot(u); }, looking);
+        thread, [&](Json args) { return tool("get_chat_messages", std::move(args)); },
+        [&](const std::string &u) { return history_snapshot(u); }, looking,
+        history_thread_ == thread ? history_rows_ : std::vector<Json>{});
     // Reconciliation commits only after the entire cursor chain validates.
     if (result.found)
         std::filesystem::remove(path);
-    return present(result);
+    auto messages = present(result);
+    history_thread_ = thread;
+    history_rows_ = std::move(result.rows);
+    return messages;
 }
 bool Client::has_pending_send(const std::string &thread_id) const {
-    tid(thread_id);
+    validate_thread(thread_id);
     auto pending = load_pending(pending_path(config_, tokens_, thread_id));
     if (!pending.is_null() && str(pending, "threadId") != thread_id)
         invalid();
@@ -555,7 +614,7 @@ bool Client::has_pending_send(const std::string &thread_id) const {
 std::string Client::voice_playback_url(const std::string &file_id) {
     if (!is_uuid(file_id))
         throw std::runtime_error("Invalid voice clip identity");
-    auto url = str(api("GET", "/api/voice/clips/" + file_id + "/playback"), "url");
+    auto url = str(tool("get_voice_playback_url", {{"fileId", file_id}}), "url");
     if (url.empty())
         invalid();
     return url;
@@ -568,8 +627,7 @@ std::string Client::upload_voice(const std::vector<std::int16_t> &pcm) {
         throw std::runtime_error("Recording must contain audio and fit within 25 MiB");
     auto audio = wav(pcm);
     auto prepared =
-        api("POST", "/api/uploads/prepare/private",
-            {{"filename", "recording.wav"}, {"contentType", mime}, {"size", audio.size()}});
+        tool("prepare_voice_upload", {{"filename", "recording.wav"}, {"size", audio.size()}});
     auto id = str(prepared, "id");
     auto url = str(prepared, "uploadUrl");
     if (!is_uuid(id) || url.empty())
@@ -579,7 +637,7 @@ std::string Client::upload_voice(const std::vector<std::int16_t> &pcm) {
     headers["Content-Type"] = mime;
     std::string_view bytes(reinterpret_cast<const char *>(audio.data()), audio.size());
     success(http_.request("PUT", url, bytes, "", headers));
-    if (str(api("POST", "/api/uploads/complete", {{"id", id}}), "id") != id)
+    if (str(tool("complete_voice_upload", {{"id", id}}), "id") != id)
         invalid();
     return id;
 }
@@ -587,34 +645,24 @@ std::string Client::upload_voice(const std::vector<std::int16_t> &pcm) {
 SendResult Client::send_voice(const std::string &thread_id, const std::string &file_id) {
     if (!is_uuid(file_id))
         throw std::runtime_error("Invalid voice clip identity");
-    auto base = tid(thread_id);
+    validate_thread(thread_id);
     auto path = pending_path(config_, tokens_, thread_id);
     auto pending = load_pending(path);
     // Reconcile through history(), never submit a second operation while uncertain.
     if (!pending.is_null())
         return {str(pending, "clientEventId"), true};
     auto id = uuid();
-    auto metadata = api("GET", base + "/metadata");
-    if (str(metadata, "id") != thread_id)
-        invalid();
-    auto sort = uuid();
     const Json parts = Json::array({
         {{"type", "voice"}, {"clips", Json::array({{{"fileId", file_id}}})}},
         {{"type", "additional_info"}, {"text", cardputer_context}},
     });
     Json body = {{"threadId", thread_id},
-                 {"prompt", "(see message parts)"},
                  {"clientEventId", id},
-                 {"chatThreadSortEventId", sort},
-                 {"userMessage", {{"version", 1}, {"parts", parts}}},
-                 {"hasTextContent", false},
-                 {"computerUseHostId", metadata.value("computerUseHostId", Json(nullptr))},
-                 {"cloudBrowserEnabled", flag(metadata, "cloudBrowserEnabled")}};
-    save_pending(path,
-                 {{"clientEventId", id}, {"chatThreadSortEventId", sort}, {"threadId", thread_id}});
+                 {"userMessage", {{"version", 1}, {"parts", parts}}}};
+    save_pending(path, {{"clientEventId", id}, {"threadId", thread_id}});
     try {
-        auto result = api("POST", "/api/chat/events", body);
-        if (str(result, "threadId") != thread_id)
+        auto result = tool("send_chat_message", body);
+        if (str(result, "threadId") != thread_id || str(result, "eventId") != id)
             return {id, true};
         std::filesystem::remove(path);
         return {id, false};
@@ -630,7 +678,7 @@ SendResult Client::send_voice(const std::string &thread_id, const std::string &f
     }
 }
 Json Client::realtime_token() {
-    auto t = api("POST", "/api/realtime/token", Json::object());
+    auto t = tool("get_chat_realtime_token", Json::object());
     for (const char *k : {"keyName", "nonce", "mac", "capability", "clientId"})
         if (str(t, k).empty())
             invalid();

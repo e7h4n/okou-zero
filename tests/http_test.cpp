@@ -97,7 +97,7 @@ class Server {
     }
     std::string url(bool tls = false) const {
         return std::string(tls ? "https" : "http") + "://127.0.0.1:" + std::to_string(port) +
-               "/fixture";
+               "/mcp";
     }
     void join() {
         if (thread_.joinable())
@@ -129,7 +129,7 @@ void tests() {
     CHECK(okou::Http::encode("a +/&\n") == "a%20%2B%2F%26%0A");
     {
         Server s(reply(200, "{\"ok\":true}", "X-Case: value\r\n"));
-        auto r = h.request("GET", s.url(), {}, "fixture-secret");
+        auto r = h.request("POST", s.url(), "{}", "fixture-secret");
         CHECK(r.status == 200);
         CHECK(r.json()["ok"] == true);
         CHECK(r.headers.at("x-case") == "value");
@@ -147,7 +147,7 @@ void tests() {
     }
     {
         Server s(reply(302, "", "Location: http://127.0.0.1:1/leak\r\n"));
-        CHECK(h.request("GET", s.url(), {}, "secret").status == 302);
+        CHECK(h.request("POST", s.url(), "{}", "secret").status == 302);
     }
     {
         Server s(reply(400, "{\"error\":\"authorization_pending\"}"));
@@ -209,6 +209,17 @@ void tests() {
         std::string(error([&] { h.request("GET", "https://user:secret@example.invalid"); }).what())
             .find("secret") == std::string::npos);
     CHECK(!error([&] { h.request("GET", "file:///etc/passwd"); }).uncertain);
+    for (const auto *target : {"https://api.okou.ai/api/chat/threads",
+                               "https://example.invalid/mcp", "https://api.okou.ai/mcp?other=1"}) {
+        auto e = error([&] { h.request("POST", target, "{}", "token"); });
+        CHECK(!e.uncertain &&
+              std::string(e.what()) == "Okou access tokens require the MCP endpoint");
+    }
+    for (const auto *target : {"https://api.okou.ai/upload",
+                               "https://account.r2.cloudflarestorage.com.example.invalid/file"}) {
+        auto e = error([&] { h.request("PUT", target, "audio"); });
+        CHECK(!e.uncertain && std::string(e.what()) == "Voice uploads require an R2 endpoint");
+    }
     CHECK(!error([&] {
                h.request("GET", "https://example.invalid", {}, "x\r\nX-Evil: 1");
            }).uncertain);
