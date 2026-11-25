@@ -115,7 +115,9 @@ class Client {
     Config config_;
     Http &http_;
     Tokens tokens_;
-    Json api(const std::string &method, const std::string &path, const Json &body = nullptr);
+    std::string history_thread_;
+    std::vector<Json> history_rows_;
+    Json tool(const std::string &name, Json arguments);
     Json history_snapshot(const std::string &url);
 };
 class Realtime {

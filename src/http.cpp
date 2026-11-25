@@ -181,7 +181,8 @@ HttpResponse Http::request(const std::string &method, const std::string &url, st
             throw HttpError(0, "HTTP header allocation failed");
         list = next;
     };
-    add("Accept: application/json");
+    if (!headers.count("Accept"))
+        add("Accept: application/json");
     if (!bearer.empty()) {
         add("Authorization: Bearer " + bearer);
         add("X-Client-Type: OkouZero");
