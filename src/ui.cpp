@@ -632,7 +632,7 @@ void UI::render_reader() {
     if (latest && !messages.empty() && messages.back().role == "user" &&
         !messages.back().terminal && playback_status.empty() &&
         (status.empty() || status == "Message accepted")) {
-        render_sending("SENT");
+        render_sending("THINKING");
         return;
     }
 
