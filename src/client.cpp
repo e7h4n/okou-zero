@@ -581,6 +581,7 @@ std::vector<Message> present(const History &h) {
         if (!p.is_object())
             p = Json::object();
         Message m{id, "", "", false};
+        m.run_id = run;
         if (type.rfind("input.", 0) == 0) {
             m.role = "user";
             if (auto origin = input_origins.find(id); origin != input_origins.end())

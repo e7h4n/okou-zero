@@ -330,12 +330,12 @@ bool UI::take_local_reply() {
     auto user = std::find_if(messages.begin(), messages.end(), [&](const Message &message) {
         return message.id == pending_reply_to_;
     });
-    if (user == messages.end())
+    if (user == messages.end() || user->run_id.empty())
         return false;
     for (auto it = std::next(user); it != messages.end(); ++it) {
-        if (it->role == "assistant" || it->role == "user") {
+        if (it->role == "assistant" && it->run_id == user->run_id) {
             pending_reply_to_.clear();
-            return it->role == "assistant";
+            return true;
         }
     }
     if (user->terminal)

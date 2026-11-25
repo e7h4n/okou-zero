@@ -94,6 +94,8 @@ bool UpdateProcess::poll() {
         return false;
     const auto old = view_.status;
     const auto drain = [&]() {
+        if (pipe_ < 0)
+            return;
         char bytes[256];
         ssize_t size;
         while ((size = read(pipe_, bytes, sizeof(bytes))) > 0) {
@@ -120,6 +122,11 @@ bool UpdateProcess::poll() {
                     result_ = {UpdateStatus::failed, {}};
             }
         }
+        if (size == 0) {
+            // EOF stays poll-readable even if the helper has not exited yet.
+            close(pipe_);
+            pipe_ = -1;
+        }
     };
     drain();
     // Checks have a hard lifecycle bound. Confirmed dpkg work is owned by the
@@ -133,7 +140,8 @@ bool UpdateProcess::poll() {
         view_ = (done == pid_ && WIFEXITED(status) && WEXITSTATUS(status) == 0)
                     ? result_
                     : UpdateView{UpdateStatus::failed, {}};
-        close(pipe_);
+        if (pipe_ >= 0)
+            close(pipe_);
         pipe_ = -1;
         pid_ = -1;
     }

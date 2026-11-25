@@ -671,8 +671,13 @@ int main(int argc, char **argv) {
             ui.complete_send(ui.current.id, "spoken message", false, "voice_event");
             check(ui.messages.size() == 1);
             check(!ui.take_local_reply());
-            ui.update_history({{"voice_event", "user", "spoken message", false},
-                               {"answer", "assistant", "Reply", true}});
+            std::vector<Message> history{
+                {"voice_event", "user", "spoken message", false, {}, {}, "local"},
+                {"unrelated", "assistant", "Other reply", true, {}, {}, "other"}};
+            ui.update_history(history);
+            check(!ui.take_local_reply());
+            history.push_back({"answer", "assistant", "Reply", true, {}, {}, "local"});
+            ui.update_history(history);
             check(ui.take_local_reply() && !ui.take_local_reply());
             ui.update_history({});
             check(ui.messages.empty());
