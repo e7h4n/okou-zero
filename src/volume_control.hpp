@@ -12,6 +12,9 @@ class VolumeControl {
   public:
     ~VolumeControl();
     void press(Key key);
+    bool pending() const {
+        return !keys_.empty();
+    }
     std::optional<VolumeStatus> poll();
 
   private:

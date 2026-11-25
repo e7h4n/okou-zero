@@ -114,6 +114,7 @@ struct Message {
     bool terminal = false;
     std::vector<std::string> voice_clips{};
     std::string local_sent_at{};
+    std::string run_id{};
 };
 struct ListState {
     std::vector<Thread> threads;

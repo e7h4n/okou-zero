@@ -128,6 +128,12 @@ replaced. Public CI tests mock updater network calls and never install a real up
 | Ctrl+Alt+U | Explicitly confirm an offered signed update |
 | Ctrl+Q | Exit to launcher |
 
+On the handheld, Okou uses the launcher's **Screen → DarkTime** setting when it opens
+(default 30 seconds, Never disables automatic screen-off). Recording and installing
+an update keep the screen awake. When idle, the backlight turns off and drawing
+pauses while messages continue to arrive. Press any key once to restore the
+previous brightness. A reply to a message sent from this device also wakes the screen.
+
 Workspace switching signs out and starts a new device grant; select the new
 organization in Clerk's browser approval page. The client never changes an
 organization ID locally to manufacture access. Unsupported rich approvals direct

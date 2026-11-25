@@ -52,6 +52,10 @@ class UI {
     void update_recording_clock();
     void update_clock();
     void update_playback_clock(unsigned seconds);
+    bool take_local_reply();
+    std::chrono::steady_clock::time_point volume_deadline() const {
+        return volume_overlay_ ? volume_until_ : std::chrono::steady_clock::time_point::max();
+    }
     void reconcile_send(const std::string &thread_id, bool pending);
 
   private:
@@ -65,6 +69,7 @@ class UI {
     lv_font_t *detail_font_ = nullptr;
     MarkdownFonts markdown_fonts_;
     std::unique_ptr<EmojiRenderer> emoji_;
+    std::string pending_reply_to_;
     ChatNavigation navigation_;
     std::vector<Message> acknowledged_messages_;
     lv_obj_t *recording_overlay_ = nullptr;

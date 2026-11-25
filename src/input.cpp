@@ -146,7 +146,8 @@ Keyboard::~Keyboard() {
         SDL_StopTextInput();
 #endif
 }
-std::vector<Input> Keyboard::poll() {
+std::vector<Input> Keyboard::poll(bool wake_only) {
+    activity_ = false;
     std::vector<Input> result;
 #if OKOU_ZERO_DESKTOP
     if (desktop_) {
@@ -260,12 +261,13 @@ std::vector<Input> Keyboard::poll() {
         if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             break;
         if (count == 0)
-            break;
+            throw std::runtime_error("Keyboard disconnected");
         if (count != sizeof(event))
             throw std::runtime_error("Keyboard disconnected");
         if (event.type == EV_SYN && event.code == SYN_DROPPED) {
             shift_ = ctrl_ = false;
             input_dropped_ = true;
+            wake_key_ = -1;
             *update_shortcut_ = UpdateShortcut{};
             result.push_back({Key::enter_cancel, {}});
             continue;
@@ -276,6 +278,19 @@ std::vector<Input> Keyboard::poll() {
             continue;
         }
         if (event.type != EV_KEY)
+            continue;
+        if (event.value == 1 || (!wake_only && event.value == 2))
+            activity_ = true;
+        if (wake_only && event.value == 1) {
+            wake_key_ = event.code;
+            wake_only = false;
+        }
+        if (event.code == wake_key_) {
+            if (!event.value)
+                wake_key_ = -1;
+            continue;
+        }
+        if (wake_only && event.value)
             continue;
         if (update_shortcut_->event(event.code, event.value)) {
             result.push_back({Key::update, {}, false, true});
