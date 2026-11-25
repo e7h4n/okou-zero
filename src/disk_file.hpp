@@ -26,9 +26,6 @@ class DiskFile {
         if (path_[0])
             ::unlink(path_);
     }
-    const char *path() const {
-        return path_;
-    }
     std::FILE *stream() {
         auto *file = ::fdopen(fd_, "w+b");
         if (!file)

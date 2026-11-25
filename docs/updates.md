@@ -5,7 +5,7 @@
 - Open the device app: an isolated Python child checks the latest stable release of `e7h4n/okou-zero` over HTTPS. It does not block LVGL or require GitHub/Okou credentials.
 - Newer releases are automatically downloaded to a user-only cache, verified, and atomically marked ready. Existing verified identical bundles are reused.
 - Only the explicit **Ctrl+Alt+U** chord on a fresh U key-down starts installation. Ctrl+U, Alt+U and key repeats do not. There is no startup installation or timer-triggered installation.
-- During installation the UI remains visible, Escape is disabled and the process waits for its installer. After successful installation, Okou `exec`s the installed executable, preserving the launcher's child ownership. On failure it shows an update error and remains usable; it does not automatically replay installation. Updates are deferred while there are unsent drafts (including other threads), pending/uncertain sends, voice capture or another busy action, so relaunch does not discard that work.
+- During installation the UI remains visible, Escape is disabled and the process waits for its installer. After successful installation, Okou `exec`s the installed executable, preserving the launcher's child ownership. On failure it shows an update error and remains usable; it does not automatically replay installation. Okou defers installation during voice capture, upload, retained audio, an uncertain send, client ID entry or another busy action.
 - Network errors, absent Releases, GitHub rate limits, missing privileges, invalid signatures, stale releases or a busy package manager never cause a forced upgrade.
 
 ## Trust and privilege boundary
@@ -35,23 +35,17 @@ The root helper takes an exclusive update lock, copies bounded stdin into a fres
 
 ## Release procedure
 
-1. A push to the trusted repository's `main` starts the release build. It increments the patch version from the previous stable tag on main's first-parent history and passes that version to CMake.
+1. A push to the trusted repository's `main` starts the release build. It increments the patch version from the previous stable tag on main's first-parent history and passes that version to CMake. Unversioned development builds report `0.0.0`.
 2. Both native CI jobs must pass protocol, UI, and package-install tests. A newer queued main push can supersede a pending build.
 3. The publisher verifies the artifact checksum and Debian metadata, then signs and verifies the manifest against the committed public key. It creates the matching tag at the tested commit and publishes the GitHub Release. It never overwrites an existing release.
 4. Devices offer the published newer release on their next app open.
 
 `python3 scripts/release.py --prepare-only ...` prepares assets without publishing. PR and feature-branch CI do not sign or publish updates.
 
-## Deliberate limits and recovery
+## Recovery
 
-- Initial bootstrap: install 0.2.2 or newer once through the existing manual/SSH process. Older apps do not contain an updater.
-- No forced upgrades, periodic background daemon, automatic OS reboot, rollout percentages, delta patches or unattended installations.
 - No automatic rollback of Debian maintainer-script side effects. Keep power connected. An interrupted/failed `dpkg` may require an administrator to inspect and repair package-manager state. No failure is represented as confirmed success, and no uncertain install is automatically replayed.
 - A failed relaunch returns to the launcher; reopen Okou manually. A failed check is retried only on a future app launch.
 - `sudo` group membership is required for confirmation installs; other users may still use the app but cannot invoke this helper through the shipped rule.
 - Public GitHub rate limits and connectivity apply. Signatures establish publisher authenticity, not release freshness or availability; blocking network traffic can prevent updates.
 - Rotate signing keys through a package signed by the currently trusted key before switching future release signing. Do not replace the key behind existing devices without a transition.
-
-## Automated coverage
-
-CTest includes the real RGB565 allocation/render regression, keyboard chord/repeat tests, headless LVGL tests and Python security fixtures using temporary test RSA keys (never production signing material). Fixtures cover malformed manifests, duplicate keys, signatures, tampering, hashes/lengths, URL redirects, time/size limits, cached bundle handling, package metadata, root argument/UID policy, locked updates, no-newer-version rules and mocked installs. CI checks installed root-owned helper/key/module/sudoers metadata and parses the exact sudo rule with `visudo` on both architectures. These tests do not substitute for the on-device release-to-release shortcut acceptance.

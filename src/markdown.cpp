@@ -230,10 +230,9 @@ int render_cell(lv_obj_t *body, const Cell &cell, const Block &block, int x, int
 }
 } // namespace
 
-lv_obj_t *markdown_body(lv_obj_t *parent, const std::string &source, int x, int y, int width,
-                        const MarkdownFonts &fonts, std::string *pinned_heading) {
-    if (pinned_heading)
-        pinned_heading->clear();
+lv_obj_t *markdown_body(lv_obj_t *parent, const std::string &source, int width,
+                        const MarkdownFonts &fonts, std::string &pinned_heading) {
+    pinned_heading.clear();
     Document doc;
     const MD_PARSER parser{0,           MD_DIALECT_GITHUB | MD_FLAG_NOHTML,
                            enter_block, leave_block,
@@ -246,7 +245,6 @@ lv_obj_t *markdown_body(lv_obj_t *parent, const std::string &source, int x, int 
          doc.blocks.front().cells.front().front().text == source &&
          !doc.blocks.front().cells.front().front().style)) {
         auto *label = lv_label_create(parent);
-        lv_obj_set_pos(label, x, y);
         lv_obj_set_width(label, width);
         lv_label_set_text(label, source.c_str());
         return label;
@@ -254,8 +252,7 @@ lv_obj_t *markdown_body(lv_obj_t *parent, const std::string &source, int x, int 
     auto *body = lv_obj_create(parent);
     lv_obj_remove_style_all(body);
     lv_obj_remove_flag(body, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_pos(body, x, y);
-    if (pinned_heading && doc.blocks.front().kind == Kind::heading && fonts.heading) {
+    if (doc.blocks.front().kind == Kind::heading && fonts.heading) {
         std::string title;
         for (const auto &run : doc.blocks.front().cells.front())
             title += run.text;
@@ -263,7 +260,7 @@ lv_obj_t *markdown_body(lv_obj_t *parent, const std::string &source, int x, int 
         lv_text_get_size(&size, title.c_str(), fonts.heading, 0, 0, LV_COORD_MAX,
                          LV_TEXT_FLAG_NONE);
         if (size.x <= width && title.find('\n') == std::string::npos) {
-            *pinned_heading = std::move(title);
+            pinned_heading = std::move(title);
             doc.blocks.erase(doc.blocks.begin());
         }
     }

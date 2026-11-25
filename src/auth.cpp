@@ -238,10 +238,7 @@ DeviceCode OAuth::begin() {
         c.device_code = str(j, "device_code", true);
         c.user_code = str(j, "user_code", true);
         c.verification_uri = str(j, "verification_uri", true);
-        c.verification_uri_complete = str(j, "verification_uri_complete");
         secure_url(c.verification_uri);
-        if (!c.verification_uri_complete.empty())
-            secure_url(c.verification_uri_complete);
         auto interval = number(j, "interval", 5), expiry = number(j, "expires_in", 0);
         if (interval < 1 || interval > 3600 || expiry < 1 || expiry > 86400)
             throw auth_error("Invalid OAuth device timing");
@@ -310,9 +307,6 @@ Tokens OAuth::parse_tokens(const Json &body, const Tokens &previous) const {
         auto j = claims(t.access_token);
         t.user_id = str(j, "sub", true);
         t.org_id = str(j, "org_id");
-        if (t.org_id.empty() && j.contains("o") && j["o"].is_object())
-            t.org_id = str(j["o"], "id");
-        t.client_id = str(j, "client_id");
         auto identifier = [](const std::string &s) {
             return s.size() <= 2048 && std::all_of(s.begin(), s.end(), [](unsigned char c) {
                        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -322,10 +316,8 @@ Tokens OAuth::parse_tokens(const Json &body, const Tokens &previous) const {
         if (t.user_id.rfind("user_", 0) != 0 || t.org_id.rfind("org_", 0) != 0 ||
             !identifier(t.user_id) || !identifier(t.org_id))
             throw auth_error("Org-bound access token required; reauthorize and select a workspace");
-        if (!t.client_id.empty() && t.client_id != config_.oauth_client_id)
+        if (str(j, "client_id", true) != config_.oauth_client_id)
             throw auth_error("Access token client does not match configured public client");
-        if (t.client_id.empty())
-            t.client_id = config_.oauth_client_id;
         t.expires_at = number(j, "exp", 0);
         if (t.expires_at <= 0)
             throw auth_error("Access token expiry missing");
@@ -380,8 +372,7 @@ Tokens OAuth::load() const {
     auto j = detail::read_private(token_path(config_));
     if (j.empty() || j.value("reauthorization_required", false))
         return {};
-    // Fail closed before parsing or using either credential. Legacy records
-    // cannot prove their grant binding and must be replaced by a fresh login.
+    // Check the grant binding before using either credential.
     auto binding = j.find("grant_binding");
     if (binding == j.end() || *binding != grant_binding(config_))
         return {};
@@ -395,9 +386,6 @@ void OAuth::save(const Tokens &t) const {
     // Persist only one credential generation, atomically; no ID token or secrets.
     Json record = {{"access_token", t.access_token},
                    {"refresh_token", t.refresh_token},
-                   {"user_id", t.user_id},
-                   {"org_id", t.org_id},
-                   {"client_id", t.client_id},
                    {"expires_at", t.expires_at},
                    {"grant_binding", grant_binding(config_)}};
     // Provenance only: startup compares configured values without network I/O.

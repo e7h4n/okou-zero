@@ -6,13 +6,9 @@
 #include <deque>
 #include <ixwebsocket/IXWebSocket.h>
 #include <random>
-#include <set>
 #include <thread>
 
 namespace okou {
-namespace {
-thread_local const void *active_realtime_worker = nullptr;
-}
 namespace realtime_detail {
 // Deliberately pure helpers, externally linked only so offline tests can exercise
 // exactly the reducer used by the transport. Not part of the supported public API.
@@ -35,60 +31,22 @@ bool safe_id(const std::string &id) {
                       c == '-' || c == '_';
            });
 }
-bool notification_name(const std::string &name) {
-    static const std::set<std::string> names{"threadListChanged",
-                                             "chatIndicatorsChanged",
-                                             "chatThreadReadCursorUpdated",
-                                             "runModelsChanged",
-                                             "userPreferenceChanged",
-                                             "computerUseHostsChanged",
-                                             "desktopShellAuthorizationChanged",
-                                             "sshAuthorizationChanged",
-                                             "ssh:changed",
-                                             "connectorPermissionUpdated",
-                                             "connector:changed"};
-    if (names.count(name))
-        return true;
-    for (const auto *prefix : {"chatThreadMessageCreated:", "chatThreadDetailChanged:"}) {
-        const std::string p(prefix);
-        if (name.compare(0, p.size(), p) != 0)
-            continue;
-        const auto id = name.substr(p.size());
-        if (id.size() != 36)
-            return false;
-        for (std::size_t i = 0; i < id.size(); ++i) {
-            if (i == 8 || i == 13 || i == 18 || i == 23) {
-                if (id[i] != '-')
-                    return false;
-            } else if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f') ||
-                         (id[i] >= 'A' && id[i] <= 'F')))
-                return false;
-        }
-        return true;
-    }
-    return false;
-}
-std::vector<std::string> subscription_channels(const std::string &user, const std::string &org) {
-    // Native OAuth grants only workspace-scoped chat invalidations. The global
-    // user channel carries unrelated capabilities and must never be attached.
-    return {"user-org:" + user + ":" + org};
-}
-Json begin(const std::vector<std::string> &channels) {
-    return {{"channels", channels},
-            {"attached", Json::array()},
-            {"ready", false},
+Json begin(const std::string &user, const std::string &org, const std::string &thread) {
+    return {{"channel", "user-org:" + user + ":" + org},
+            {"message_event", "chatThreadMessageCreated:" + thread},
+            {"detail_event", "chatThreadDetailChanged:" + thread},
+            {"attached", false},
             {"transport", false},
             {"key", ""},
-            {"serials", Json::object()}};
+            {"serial", ""}};
 }
 void lost(Json &state) {
-    state["ready"] = false;
+    state["attached"] = false;
     state["transport"] = false;
-    state["attached"] = Json::array();
 }
 Json step(Json &state, const Json &message) {
     Json result{{"send", Json::array()},
-                {"events", Json::array()},
+                {"refresh", false},
                 {"reconnect", false},
                 {"auth", false},
                 {"fatal", false}};
@@ -96,50 +54,32 @@ Json step(Json &state, const Json &message) {
         return result;
     const auto action = number(message, "action", -1);
     const auto channel = text(message, "channel");
-    const auto &channels = state.at("channels");
-    const bool ours = std::find(channels.begin(), channels.end(), channel) != channels.end();
+    const bool ours = channel == state.at("channel");
     if (action == 4) { // CONNECTED, including AUTH confirmation
-        std::string key = text(message, "connectionKey");
-        if (message.contains("connectionDetails") && message["connectionDetails"].is_object()) {
-            const auto nested = text(message["connectionDetails"], "connectionKey");
-            if (!nested.empty())
-                key = nested;
+        if (message.contains("connectionDetails")) {
+            auto key = text(message["connectionDetails"], "connectionKey");
+            if (!key.empty() && key.size() <= 4096)
+                state["key"] = std::move(key);
         }
-        if (!key.empty() && key.size() <= 4096)
-            state["key"] = key;
         if (!state.at("transport").get<bool>()) {
             state["transport"] = true;
-            for (const auto &c : channels) {
-                Json attach{{"action", 10}, {"channel", c}, {"flags", 1 << 18}}; // SUBSCRIBE only
-                const auto serial = state["serials"].find(c.get<std::string>());
-                if (serial != state["serials"].end())
-                    attach["channelSerial"] = *serial;
-                result["send"].push_back(std::move(attach));
-            }
+            Json attach{{"action", 10}, {"channel", state["channel"]}, {"flags", 1 << 18}};
+            if (state["serial"] != "")
+                attach["channelSerial"] = state["serial"];
+            result["send"].push_back(std::move(attach));
         }
     } else if (action == 11 && ours && state.at("transport").get<bool>()) { // ATTACHED
-        auto &attached = state["attached"];
-        const bool repeated =
-            std::find(attached.begin(), attached.end(), channel) != attached.end();
-        if (!repeated)
-            attached.push_back(channel);
-        // No continuity claim: always catch up when the workspace channel
-        // attaches on a new transport, even if RESUMED is set. Handle gaps in place.
-        if (attached.size() == channels.size() && !state.at("ready").get<bool>()) {
-            result["events"].push_back("connection:gap");
-            result["events"].push_back("connection:connected");
-            state["ready"] = true;
-        } else if (repeated && state.at("ready").get<bool>() && !(number(message, "flags") & 4)) {
-            result["events"].push_back("connection:gap");
-        }
-    } else if (action == 15 && ours && state.at("transport").get<bool>()) { // MESSAGE
-        const auto &attached = state.at("attached");
-        if (std::find(attached.begin(), attached.end(), channel) != attached.end() &&
-            message.contains("messages") && message["messages"].is_array()) {
+        // Catch up on each new transport and on an in-place loss of continuity.
+        result["refresh"] = !state["attached"].get<bool>() || !(number(message, "flags") & 4);
+        state["attached"] = true;
+    } else if (action == 15 && ours && state.at("attached").get<bool>()) { // MESSAGE
+        if (message.contains("messages") && message["messages"].is_array()) {
             for (const auto &item : message["messages"]) {
                 const auto name = text(item, "name");
-                if (notification_name(name))
-                    result["events"].push_back(name);
+                if (name == state["message_event"] || name == state["detail_event"]) {
+                    result["refresh"] = true;
+                    break;
+                }
             }
         }
     } else if (action == 17) { // AUTH challenge
@@ -158,14 +98,12 @@ Json step(Json &state, const Json &message) {
         result["fatal"] =
             !token_error && (status == 401 || status == 403 || (code >= 40000 && code < 50000));
         result["reconnect"] = true;
-        if (state.at("ready").get<bool>())
-            result["events"].push_back("connection:disconnected");
         lost(state);
     }
-    if (ours && (action == 11 || action == 15)) {
+    if (ours && state["attached"].get<bool>() && (action == 11 || action == 15)) {
         const auto serial = text(message, "channelSerial");
         if (!serial.empty() && serial.size() <= 4096)
-            state["serials"][channel] = serial;
+            state["serial"] = serial;
     }
     return result;
 }
@@ -200,10 +138,10 @@ Json token_request_body(const Json &request, const std::string &user) {
 struct Realtime::Impl {
     using Clock = std::chrono::steady_clock;
     std::function<Json()> provider;
-    std::string user, org;
-    Notify notify;
-    std::atomic_bool stopping{false}, online{false};
-    std::mutex lifecycle, queue_mutex;
+    std::string user;
+    Notify refresh_history;
+    std::atomic_bool stopping{false};
+    std::mutex queue_mutex;
     std::condition_variable wake;
     std::thread worker;
     struct Frame {
@@ -216,35 +154,13 @@ struct Realtime::Impl {
     Json state;
     std::string token;
     std::int64_t refresh_at = 0;
-    bool unavailable_notified = false; // Worker-owned, deduplicates unavailable transitions.
-
-    void deliver(const std::string &event) {
-        if (event == "connection:disconnected") {
-            online.store(false);
-            if (unavailable_notified)
-                return;
-            unavailable_notified = true;
-        } else if (event == "connection:connected") {
-            unavailable_notified = false;
-            online.store(true);
-        }
-        notify(event);
-    }
-    void unavailable() noexcept {
-        try {
-            deliver("connection:disconnected");
-        } catch (...) {
-            online.store(false);
-        }
-    }
-
-    Impl(std::function<Json()> p, std::string u, std::string o, Notify n)
-        : provider(std::move(p)), user(std::move(u)), org(std::move(o)), notify(std::move(n)) {
-        if (!provider || !notify || !realtime_detail::safe_id(user) ||
+    Impl(std::function<Json()> p, std::string u, const std::string &org, const std::string &thread,
+         Notify refresh)
+        : provider(std::move(p)), user(std::move(u)), refresh_history(std::move(refresh)),
+          state(realtime_detail::begin(user, org, thread)) {
+        if (!provider || !refresh_history || !realtime_detail::safe_id(user) ||
             !realtime_detail::safe_id(org))
-            throw std::invalid_argument(
-                "Realtime requires provider, callback and valid user/workspace IDs");
-        state = realtime_detail::begin(realtime_detail::subscription_channels(user, org));
+            throw std::invalid_argument("Invalid realtime subscriber");
     }
     static std::int64_t now_ms() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -349,15 +265,10 @@ struct Realtime::Impl {
                     for (const auto &command : effects["send"])
                         if (!send(socket, command))
                             return false;
-                    // The gap intent is delivered before the connected lifecycle event.
-                    for (const auto &event : effects["events"]) {
-                        if (stopping.load())
-                            return false;
-                        deliver(event.get<std::string>());
-                    }
+                    if (effects["refresh"].get<bool>() && !stopping.load())
+                        refresh_history();
                     if (effects["fatal"].get<bool>()) {
-                        // Do not spin on capability/identity denial. Owner can stop/start
-                        // after correcting credentials or scopes.
+                        // A new authorized session creates a new subscriber.
                         stopping.store(true);
                         return false;
                     }
@@ -370,7 +281,7 @@ struct Realtime::Impl {
                 }
             }
             const auto now = Clock::now();
-            if ((!state.at("ready").get<bool>() && now > deadline) || now > auth_deadline ||
+            if ((!state.at("attached").get<bool>() && now > deadline) || now > auth_deadline ||
                 now > ping_deadline ||
                 (max_idle_ms > 0 && now - last_rx > std::chrono::milliseconds(max_idle_ms + 10000)))
                 return false;
@@ -392,9 +303,6 @@ struct Realtime::Impl {
         return false;
     }
     void run() noexcept {
-        active_realtime_worker = this;
-        unavailable_notified = false;
-        unavailable();
         unsigned failures = 0;
         std::mt19937 random(
             static_cast<std::mt19937::result_type>(Clock::now().time_since_epoch().count()));
@@ -436,13 +344,11 @@ struct Realtime::Impl {
                     connection(socket);
                 } catch (...) { /* sanitized failure; retry below */
                 }
-                unavailable();
                 socket.stop(); // Owner worker, never called on IX's callback thread.
                 realtime_detail::lost(state);
             } catch (...) {
                 // Provider, HTTP and JSON exceptions may contain private responses.
-                // Deliberately do not log or forward their messages to Notify.
-                unavailable();
+                // Reconnect without logging private details.
             }
             if (stopping.load())
                 break;
@@ -453,42 +359,20 @@ struct Realtime::Impl {
             if (wait(delay))
                 break;
         }
-        unavailable();
-        active_realtime_worker = nullptr;
     }
 };
-Realtime::Realtime(std::function<Json()> provider, std::string user, std::string org, Notify notify)
-    : impl_(std::make_unique<Impl>(std::move(provider), std::move(user), std::move(org),
-                                   std::move(notify))) {}
-Realtime::~Realtime() {
-    stop();
-}
-void Realtime::start() {
-    std::lock_guard<std::mutex> lock(impl_->lifecycle);
-    if (impl_->worker.joinable())
-        return;
-    impl_->stopping.store(false);
+Realtime::Realtime(std::function<Json()> provider, std::string user, std::string org,
+                   std::string thread_id, Notify refresh_history)
+    : impl_(std::make_unique<Impl>(std::move(provider), std::move(user), org, thread_id,
+                                   std::move(refresh_history))) {
     impl_->worker = std::thread([p = impl_.get()] { p->run(); });
 }
-void Realtime::stop() {
-    // A Notify callback may request stop, but may not destroy Realtime or call
-    // start. Joining and final destruction remain the owning thread's job.
-    // TLS avoids reading std::thread concurrently with owner lifecycle changes,
-    // and avoids deadlocking a callback while the owner is joining it.
-    if (active_realtime_worker == impl_.get()) {
-        impl_->stopping.store(true);
-        impl_->online.store(false);
-        impl_->wake.notify_all();
-        return;
+Realtime::~Realtime() {
+    {
+        std::lock_guard<std::mutex> lock(impl_->queue_mutex);
+        impl_->stopping = true;
     }
-    std::lock_guard<std::mutex> lock(impl_->lifecycle);
-    impl_->stopping.store(true);
-    impl_->online.store(false);
     impl_->wake.notify_all();
-    if (impl_->worker.joinable())
-        impl_->worker.join();
-}
-bool Realtime::connected() const {
-    return impl_->online.load();
+    impl_->worker.join();
 }
 } // namespace okou

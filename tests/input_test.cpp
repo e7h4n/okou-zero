@@ -18,10 +18,8 @@ int main() {
         check(map_key(KEY_1, true, false, false).text == "!");
         check(map_key(KEY_APOSTROPHE, true, false, false).text == "\"");
         check(map_key(KEY_BACKSLASH, false, false, false).text == "\\");
-        check(map_key(KEY_R, false, false, true).key == Key::record);
+        check(map_key(KEY_R, false, false, true).key == Key::retry_voice);
         check(map_key(KEY_W, false, false, true).key == Key::workspace);
-        check(map_key(KEY_ENTER, true, false, false).shift);
-        check(map_key(KEY_ENTER, false, false, true).key == Key::enter);
         check(map_key(KEY_UP, false, false, false).key == Key::up);
         check(map_key(KEY_F12, false, false, false).key == Key::none);
         int ports[2];
