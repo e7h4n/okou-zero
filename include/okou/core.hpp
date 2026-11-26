@@ -90,7 +90,6 @@ class OAuth {
 struct Message {
     std::string id, role, text;
     bool terminal = false;
-    std::vector<std::string> voice_clips{};
     std::string local_sent_at{};
     std::string run_id{};
 };
@@ -105,7 +104,6 @@ class Client {
     std::string fixed_thread_id();
     std::vector<Message> history(const std::string &thread_id);
     bool has_pending_send(const std::string &thread_id) const;
-    std::string voice_playback_url(const std::string &file_id);
     std::string upload_voice(const std::vector<std::int16_t> &pcm);
     SendResult send_voice(const std::string &thread_id, const std::string &file_id);
     Json realtime_token();
@@ -134,9 +132,6 @@ class Realtime {
     std::unique_ptr<Impl> impl_;
 };
 std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm);
-struct PlaybackMeter;
-void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop,
-              PlaybackMeter &meter);
 class RecordingWaveform;
 class AudioCapture {
   public:

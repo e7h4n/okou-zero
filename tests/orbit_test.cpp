@@ -28,17 +28,17 @@ int main() {
                 throw std::runtime_error(message);
         };
         okou::RecordingWaveform mic;
-        okou::PlaybackMeter playback;
         {
-            okou::PocketOrbit art(root, mic, playback);
+            okou::PocketOrbit art(root, mic);
             art.show(okou::OrbitScene::welcome);
             auto welcome = frame(400);
-            check(std::count_if(welcome.begin(), welcome.end(),
-                                [](uint16_t rgb) {
-                                    return (rgb >> 11) > 26 && ((rgb >> 5) & 63) > 27 &&
-                                           ((rgb >> 5) & 63) < 49 && (rgb & 31) < 6;
-                                }) > 90,
-                  "The native welcome screen must contain the orange avatar");
+            auto has_avatar = [](const auto &frame) {
+                return std::count_if(frame.begin(), frame.end(), [](uint16_t rgb) {
+                           return (rgb >> 11) > 26 && ((rgb >> 5) & 63) > 27 &&
+                                  ((rgb >> 5) & 63) < 49 && (rgb & 31) < 6;
+                       }) > 90;
+            };
+            check(has_avatar(welcome), "The welcome screen must contain the orange avatar");
             check(welcome != frame(250), "The welcome satellite must move");
             art.show(okou::OrbitScene::record);
             auto quiet = frame(400);
@@ -51,15 +51,15 @@ int main() {
             auto departed = frame(120);
             check(departed != frame(900), "Submitting must move the satellite out");
             auto arrived = frame(0);
-            check(arrived == frame(500), "The outgoing satellite must stay at the exit");
+            check(has_avatar(arrived), "The face must remain visible throughout sending");
+            check(arrived != frame(500), "Sending must stay animated while waiting for a receipt");
             art.show(okou::OrbitScene::wait);
             auto accepted = frame(400);
             check(accepted != frame(350), "Waiting for a reply must remain animated");
-            for (auto scene :
-                 {okou::OrbitScene::pairing, okou::OrbitScene::bookmark, okou::OrbitScene::pause}) {
+            for (auto scene : {okou::OrbitScene::pairing, okou::OrbitScene::bookmark}) {
                 art.show(scene);
                 auto settled = frame(400);
-                check(settled == frame(980), "Pairing, reading and paused audio must settle");
+                check(settled == frame(980), "Pairing and reading must settle");
             }
         }
         lv_display_delete(display);

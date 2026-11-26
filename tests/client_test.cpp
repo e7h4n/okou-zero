@@ -314,7 +314,7 @@ void history_test() {
         unsetenv("TZ");
     tzset();
     check(messages.size() == 5, "Revoked and successful completion rows hidden");
-    check(messages[0].role == "user" && messages[0].text == "Hello", "user presentation");
+    check(messages[0].role == "user", "user event tracks acknowledgement");
     check(messages[1].text == "Visible answer" && messages[1].terminal,
           "assistant terminal evidence");
     check(messages[0].local_sent_at.empty() && messages[1].local_sent_at == "2026-11-23 17:12",
@@ -569,16 +569,11 @@ void voice_history_test() {
     promoted["revokesEventId"] = id(1);
     // An independent send of the same clip remains a separate user message.
     auto rows = Json::array({queued, promoted, row(3, "input.prompt", payload)});
-    const auto url = f.server.origin() + "/storage/voice?signature=private";
-    f.server.start({page(page_args(0), tail(rows, 3, id(3))),
-                    reply("get_voice_playback_url", {{"fileId", clip_id}}, {{"url", url}})});
+    f.server.start({page(page_args(0), tail(rows, 3, id(3)))});
     auto client = f.client();
     auto messages = client.history(thread_id);
-    check(messages.size() == 2 && messages[0].id == id(1) && messages[1].id == id(3) &&
-              messages[0].text == "[Voice message]" &&
-              messages[0].voice_clips == std::vector<std::string>{clip_id},
-          "Promoted voice replaces its placeholder and retains playback and the original send ID");
-    check(client.voice_playback_url(clip_id) == url, "Preserves the signed playback URL");
+    check(messages.size() == 2 && messages[0].id == id(1) && messages[1].id == id(3),
+          "Promoted voice retains its original send ID");
     f.server.finish();
 }
 void voice_message_test() {

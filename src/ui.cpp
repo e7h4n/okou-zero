@@ -81,7 +81,7 @@ UI::UI(lv_display_t *display) {
     lv_obj_set_style_bg_color(root_, lv_color_hex(paper), 0);
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
     lv_obj_set_size(root_, 320, 170);
-    orbit_ = std::make_unique<PocketOrbit>(root_, recording_waveform, playback);
+    orbit_ = std::make_unique<PocketOrbit>(root_, recording_waveform);
     const auto load = [this](const std::filesystem::path &path, int size,
                              lv_freetype_font_style_t style = LV_FREETYPE_FONT_STYLE_NORMAL) {
         if (!std::filesystem::is_regular_file(path))
@@ -117,7 +117,6 @@ UI::UI(lv_display_t *display) {
     markdown_fonts_.code = load(dejavu / "DejaVuSansMono.ttf", 12);
     if (markdown_fonts_.code)
         markdown_fonts_.code->fallback = font_ ? font_ : LV_FONT_DEFAULT;
-    pixel_font_ = branded("Silkscreen-Regular.ttf", 10, detail_font_);
     greeting_font_ = branded("Silkscreen-Regular.ttf", 22, title_cjk);
     display_font_ = branded("Geist-Bold.ttf", 27, title_cjk);
     lv_obj_set_style_text_font(root_, font_ ? font_ : LV_FONT_DEFAULT, 0);
@@ -206,16 +205,14 @@ void UI::reset_account() {
     turn_direction_ = 0;
     busy = recording = uncertain = submitting = voice_pending = voice_working = false;
 }
-void UI::complete_send(const std::string &id, const SendResult &result,
-                       const std::string &file_id) {
+void UI::complete_send(const std::string &id, const SendResult &result) {
     if (thread_id == id) {
         uncertain = result.uncertain;
         if (!uncertain) {
             pending_reply_to_ = result.client_event_id;
             if (std::none_of(messages.begin(), messages.end(),
                              [&](const Message &m) { return m.id == result.client_event_id; })) {
-                Message message{
-                    result.client_event_id, "user", "[Voice message]", false, {file_id}};
+                Message message{result.client_event_id, "user", "", false};
                 acknowledged_messages_.push_back(message);
                 if (acknowledged_messages_.size() > 30)
                     acknowledged_messages_.erase(acknowledged_messages_.begin());
@@ -305,8 +302,26 @@ Action UI::handle(const Input &input) {
         return Action::none;
     }
     if (page == Page::chat) {
-        if (input.key == Key::space && !recording && !voice_pending && !submitting)
-            return Action::playback;
+        if (input.key == Key::enter && !input.shift && !input.ctrl && !thread_id.empty()) {
+            if (recording) {
+                recording = false;
+                voice_pending = voice_working = busy = true;
+                status = "Sending voice message...";
+                return Action::voice;
+            }
+            if (!busy && !voice_pending && !submitting && !uncertain) {
+                recording_started = {};
+                recording = voice_working = busy = true;
+                status.clear();
+                return Action::start_recording;
+            }
+        }
+        if ((input.key == Key::escape && (recording || (voice_pending && !busy))) ||
+            (input.key == Key::enter_cancel && recording)) {
+            recording = false;
+            voice_working = busy = true;
+            return Action::discard_recording;
+        }
         if (input.key == Key::escape && status == "Network unavailable" && !busy) {
             status.clear();
             return Action::none;
@@ -319,9 +334,7 @@ Action UI::handle(const Input &input) {
             voice_working = true;
             return Action::voice;
         }
-        const bool reading = !recording && (playback_status.empty() ||
-                                            playback_status == "Could not play recording");
-        if (!reading)
+        if (recording)
             return Action::none;
         if (turn_direction_)
             render();
@@ -384,12 +397,12 @@ void UI::show_volume(VolumeStatus volume) {
     volume_overlay_ = shape(top, 96, 62, 131, 25, 5, ink);
     bool quiet = volume.muted || volume.percent == 0;
     const char *symbol = quiet ? LV_SYMBOL_MUTE : LV_SYMBOL_VOLUME_MAX;
-    auto *icon = label(volume_overlay_, symbol, 6, 4, 17, paper, 16);
+    auto *icon = label(volume_overlay_, symbol, 6, 5, 17, paper, 16);
     lv_obj_set_style_text_font(icon, &lv_font_montserrat_12, 0);
     std::string caption = volume.percent < 0 ? "Audio unavailable"
                                              : (volume.muted ? "Muted  " : "Volume  ") +
                                                    std::to_string(volume.percent) + "%";
-    auto *text = label(volume_overlay_, caption, 24, 2, 104, paper, 18);
+    auto *text = label(volume_overlay_, caption, 24, 6, 104, paper, 18);
     lv_obj_set_style_text_font(text, detail_font_ ? detail_font_ : &lv_font_montserrat_12, 0);
     volume_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
 }
@@ -399,33 +412,14 @@ void UI::dismiss_expired_volume() {
         volume_overlay_ = nullptr;
     }
 }
-void UI::render_voice_panel(bool capturing) {
-    const bool paused = !capturing && playback_status.rfind("Paused", 0) == 0;
-    recording_overlay_ = shape(body_, 0, 0, 320, 127, 0, paper);
-    orbit_->sky(recording_overlay_);
-    shape(recording_overlay_, 12, 16, 5, 5, 1, green);
-    type(recording_overlay_,
-         capturing ? "REC"
-         : paused  ? "PAUSE"
-                   : "PLAY",
-         21, 10, 120, green, pixel_font_, 18);
-    type(recording_overlay_,
-         capturing ? "Listening."
-         : paused  ? "Paused."
-                   : "Playing.",
-         10, 28, 171, ink, display_font_, 38);
-    if (capturing) {
-        recording_clock_ =
-            type(recording_overlay_, "00:00", 12, 66, 143, ink, markdown_fonts_.bold, 22);
-        recording_seconds_ = -1;
-        update_recording_clock();
-    } else {
-        playback_clock_ =
-            type(recording_overlay_, "00:00", 12, 66, 155, ink, markdown_fonts_.bold, 22);
-        playback_seconds_ = playback_duration_ = -1;
-        update_playback_clock();
-    }
-    auto *wave = lv_obj_create(recording_overlay_);
+void UI::render_recording() {
+    auto *panel = shape(body_, 0, 0, 320, 127, 0, paper);
+    orbit_->sky(panel);
+    type(panel, "Listening.", 10, 22, 171, ink, display_font_, 38);
+    recording_clock_ = type(panel, "00:00", 12, 64, 143, ink, markdown_fonts_.bold, 22);
+    recording_seconds_ = -1;
+    update_recording_clock();
+    auto *wave = lv_obj_create(panel);
     lv_obj_remove_style_all(wave);
     lv_obj_set_pos(wave, 12, 85);
     lv_obj_set_size(wave, 145, 36);
@@ -435,8 +429,7 @@ void UI::render_voice_panel(bool capturing) {
             const auto *ui = static_cast<UI *>(lv_event_get_user_data(e));
             lv_area_t a;
             lv_obj_get_coords(lv_event_get_target_obj(e), &a);
-            const auto peaks =
-                (ui->recording ? ui->recording_waveform : ui->playback.waveform).snapshot();
+            const auto peaks = ui->recording_waveform.snapshot();
             const auto height = [](int v) {
                 return std::lround(13 * std::log1p(std::abs(v) / 48.) / std::log1p(32768. / 48.));
             };
@@ -446,48 +439,14 @@ void UI::render_voice_panel(bool capturing) {
                 draw_segment(e, a, x, 15 - height(peaks[i].high), x, 15 + height(peaks[i].low),
                              green);
             }
-            if (ui->recording) {
-                for (int x = 0; x <= 144; x += 36)
-                    draw_segment(e, a, x, 31, x, 33, border);
-            } else {
-                const auto duration = ui->playback.duration_ms.load();
-                const int x = duration
-                                  ? std::min<uint64_t>(
-                                        142, 142ULL * ui->playback.elapsed_ms.load() / duration)
-                                  : 0;
-                draw_segment(e, a, 0, 31, 142, 31, border);
-                draw_segment(e, a, 0, 31, x, 31, green);
-                draw_segment(e, a, x, 28, x, 33, green);
-            }
+            for (int x = 0; x <= 144; x += 36)
+                draw_segment(e, a, x, 31, x, 33, border);
         },
         LV_EVENT_DRAW_MAIN, this);
-    if (!paused)
-        animate_redraw(wave, 20);
-    orbit_->show(capturing ? OrbitScene::record : paused ? OrbitScene::pause : OrbitScene::play);
-    footer_hint(capturing ? "Release Enter  Send"
-                : paused  ? "Space  Resume"
-                          : "Space  Pause",
-                capturing ? "Esc  Discard" : "Voice note");
+    animate_redraw(wave, 20);
+    orbit_->show(OrbitScene::record);
+    footer_hint("Enter to send", "Esc to cancel");
 }
-void UI::update_playback_clock() {
-    if (!playback_clock_)
-        return;
-    const auto seconds = playback.elapsed_ms.load() / 1000;
-    const auto duration = playback.duration_ms.load() / 1000;
-    // A downloaded clip can become available before the first elapsed second.
-    if (seconds == playback_seconds_ && duration == playback_duration_)
-        return;
-    playback_seconds_ = seconds;
-    playback_duration_ = duration;
-    char text[36]{};
-    if (duration)
-        std::snprintf(text, sizeof(text), "%02u:%02u / %02u:%02u", seconds / 60, seconds % 60,
-                      duration / 60, duration % 60);
-    else
-        std::snprintf(text, sizeof(text), "%02u:%02u", seconds / 60, seconds % 60);
-    lv_label_set_text(playback_clock_, text);
-}
-
 void UI::update_clock() {
     const auto now = std::time(nullptr);
     if (!clock_ || now / 60 == clock_minute_)
@@ -503,22 +462,12 @@ void UI::update_clock() {
 
 void UI::render_header() {
     lv_obj_clean(header_);
-    clock_ = type(header_, "--:--", 9, 0, 55, muted, detail_font_, 15);
+    clock_ = type(header_, "--:--", 9, 2, 55, muted, detail_font_, 15);
     clock_minute_ = -1;
     update_clock();
-    const char *section =
-        page == Page::setup      ? "DEVICE SETUP"
-        : page == Page::settings ? "SETTINGS"
-        : page == Page::login    ? (user_code.empty() ? "OKOU ZERO" : "DEVICE SIGN-IN")
-        : recording              ? "MIC INPUT"
-        : playback_status.rfind("Playing", 0) == 0 || playback_status.rfind("Paused", 0) == 0
-            ? "VOICE NOTE"
-            : "CONVERSATION";
-    auto *name = type(header_, section, 63, 0, 194, ink, pixel_font_, 15);
-    lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
     shape(header_, 8, 16, 304, 1, 0, border);
     auto *value =
-        type(header_, battery.percent >= 0 ? std::to_string(battery.percent) + "%" : "--%", 245, 0,
+        type(header_, battery.percent >= 0 ? std::to_string(battery.percent) + "%" : "--%", 245, 2,
              43, muted, detail_font_, 15);
     lv_obj_set_style_text_align(value, LV_TEXT_ALIGN_RIGHT, 0);
     const auto color =
@@ -529,16 +478,14 @@ void UI::render_header() {
         shape(header_, 295, 6, std::max(1, 12 * std::min(100, battery.percent) / 100), 4, 0, color);
     shape(header_, 309, 6, 2, 4, 0, muted);
     if (battery.charging)
-        type(header_, LV_SYMBOL_CHARGE, 237, 0, 12, green, &lv_font_montserrat_12, 15);
+        type(header_, LV_SYMBOL_CHARGE, 237, 1, 12, green, &lv_font_montserrat_12, 15);
 }
 void UI::render_sending(bool accepted) {
     orbit_->sky(body_);
-    type(body_, accepted ? "AWAITING REPLY" : "RELEASED", 12, 12, 180, muted, pixel_font_, 18);
-    type(body_, accepted ? "Thinking." : "Sending.", 10, 36, 170, ink, display_font_, 38);
-    type(body_, accepted ? "Okou has your message." : "Waiting for receipt", 12, 80, 174, ink,
-         detail_font_, 22);
+    type(body_, accepted ? "Thinking." : "Sending.", 10, 44, 170, ink, display_font_, 38);
     orbit_->show(accepted ? OrbitScene::wait : OrbitScene::send);
-    footer_hint(accepted ? "Message accepted" : "Submitting recording");
+    if (!accepted)
+        footer_hint("Submitting recording");
 }
 void UI::render_reader() {
     // Keep the original message positions to associate user events with the following reply.
@@ -553,26 +500,9 @@ void UI::render_reader() {
     navigation_.layout(std::move(ids));
     const int pos = navigation_.position(), count = static_cast<int>(replies.size());
     const bool latest = pos == count - 1;
-    const auto after = pos < 0 ? 0 : replies[pos] + 1;
-    const std::size_t first = pos > 0 ? replies[pos - 1] + 1 : 0;
-    const auto add_voice = [&](std::size_t start, std::size_t end) {
-        for (auto i = start; i < end; ++i)
-            visible_voice_clips.insert(visible_voice_clips.end(), messages[i].voice_clips.begin(),
-                                       messages[i].voice_clips.end());
-    };
-    if (latest && after < messages.size())
-        add_voice(after, messages.size());
-    if (visible_voice_clips.empty())
-        add_voice(first, after);
-    if (!playback_status.empty() && playback_status != "Could not play recording") {
-        render_voice_panel(false);
-        return;
-    }
-
     // Stay on the animated panel after acknowledgement until a reply or terminal event arrives.
     if (latest && !messages.empty() && messages.back().role == "user" &&
-        !messages.back().terminal && playback_status.empty() &&
-        (status.empty() || status == "Message accepted")) {
+        !messages.back().terminal && (status.empty() || status == "Message accepted")) {
         render_sending(true);
         return;
     }
@@ -584,7 +514,6 @@ void UI::render_reader() {
                             : thread_id.empty() ? "Chat unavailable."
                             : messages.empty()  ? "Ready when\nyou are."
                                                 : "No reply yet.";
-        type(body_, opening ? "WORKSPACE" : "CONVERSATION", 12, 12, 175, muted, pixel_font_, 18);
         type(body_, title, 10, 33, 176, ink, markdown_fonts_.heading, 70);
         orbit_->show(opening             ? OrbitScene::wait
                      : thread_id.empty() ? OrbitScene::marker
@@ -677,15 +606,14 @@ void UI::render_reader() {
 }
 
 void UI::render() {
-    visible_voice_clips.clear();
     render_header();
     if (page == Page::chat && recording && recording_clock_)
         return;
-    recording_overlay_ = recording_clock_ = playback_clock_ = nullptr;
+    recording_clock_ = nullptr;
     lv_obj_clean(body_);
     lv_obj_clean(footer_);
     if (page == Page::chat && recording) {
-        render_voice_panel(true);
+        render_recording();
         return;
     }
     if (page == Page::setup) {
@@ -704,7 +632,6 @@ void UI::render() {
             status.rfind("Code expired", 0) == 0 || status.rfind("Sign-in expired", 0) == 0;
         if (user_code.empty() && busy) {
             orbit_->sky(body_);
-            type(body_, "DEVICE SIGN-IN", 12, 12, 174, muted, pixel_font_, 18);
             type(body_, "Getting a code.", 10, 38, 180, ink, markdown_fonts_.heading, 60);
             orbit_->show(OrbitScene::wait);
         } else if (user_code.empty() && expired) {
@@ -774,17 +701,14 @@ void UI::render() {
         // Voice and network panels supply their own controls.
         if (lv_obj_get_child_count(footer_))
             return;
-        if (!playback_status.empty())
-            footer_hint(playback_status);
-        else if (!status.empty() && status != "Message accepted")
-            footer_hint(status);
+        if (!status.empty() && status != "Message accepted")
+            footer_hint(status, thread_id.empty() || busy ? "" : "Enter to record");
         else if (thread_id.empty())
             footer_hint("Ctrl+L  Retry", "Ctrl+W  Settings");
         else if (messages.empty())
-            footer_hint("Hold Enter  Record", "Ctrl+W  Settings");
+            footer_hint("Ctrl+W  Settings", "Enter to record");
         else
-            footer_hint("↑ ↓  Scroll    ← →  History",
-                        visible_voice_clips.empty() ? "Hold Enter  Rec" : "Space  Play");
+            footer_hint("↑ ↓  Scroll    ← →  History", "Enter to record");
     }
 }
 void UI::demo(const std::string &screen) {
@@ -793,7 +717,6 @@ void UI::demo(const std::string &screen) {
     busy = false;
     submitting = recording = voice_pending = uncertain = voice_working = false;
     status.clear();
-    playback_status.clear();
     update_message.clear();
     user_code.clear();
     verification_uri.clear();
@@ -808,14 +731,11 @@ void UI::demo(const std::string &screen) {
         status = "Demo sign-in code";
     } else {
         open_thread("demo-thread");
-        messages = {{"event_1", "user", "What should I pack?", false, {"demo-clip"}},
-                    {"event_2",
-                     "assistant",
+        messages = {{"event_1", "user", "What should I pack?", false},
+                    {"event_2", "assistant",
                      "## Ridge walk\n\nPack a **wind shell** and water. The ridge gets cold after "
                      "noon. Keep the map dry.",
-                     true,
-                     {},
-                     "2026-11-24 10:42"}};
+                     true, "2026-11-24 10:42"}};
         if (screen == "empty")
             messages.clear();
         else if (screen == "saved")
@@ -823,7 +743,7 @@ void UI::demo(const std::string &screen) {
         else if (screen == "settings")
             page = Page::settings;
         else if (screen == "sent")
-            messages.push_back({"sent", "user", "[Voice message]", false, {"demo-clip"}});
+            messages.push_back({"sent", "user", "[Voice message]", false});
         else if (screen == "sending")
             busy = submitting = voice_pending = true;
         else if (screen == "uncertain")
@@ -832,7 +752,7 @@ void UI::demo(const std::string &screen) {
             status = "Network unavailable";
         else if (screen == "history") {
             messages = {
-                {"u1", "user", "Trip itinerary", false, {"demo-clip"}},
+                {"u1", "user", "Trip itinerary", false},
                 {"a1", "assistant", "## Before leaving\n\nCheck the route and weather.", false},
                 {"a2", "assistant", "The lake is our first stop.", false},
                 {"u2", "user", "One more thing", false},
@@ -841,19 +761,13 @@ void UI::demo(const std::string &screen) {
                 {"a4", "assistant", "## Next stop\n\nFollow the path east.", false},
                 {"a5", "assistant", "## Meet at dusk\n\nWait at the station.", false},
                 {"u4", "user", "Packing list", false},
-                {"a6",
-                 "assistant",
+                {"a6", "assistant",
                  "## "
                  "Trip checklist\n\nPack water and a jacket.\nSave an offline map.\nCheck the "
                  "camera battery.\nConfirm your train ticket.\nMessage your team.\nPick up your "
                  "keys.",
-                 false,
-                 {},
-                 "2026-11-24 11:08"}};
-        } else if (screen == "playback" || screen == "paused")
-            playback_status =
-                screen == "paused" ? "Paused   Space resume" : "Playing   Space pause";
-        else if (screen == "recording") {
+                 false, "2026-11-24 11:08"}};
+        } else if (screen == "recording") {
             recording = true;
             recording_started = std::chrono::steady_clock::now();
         } else if (screen == "update") {

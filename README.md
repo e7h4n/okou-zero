@@ -1,7 +1,7 @@
 # Okou
 
 A native Okou client for the **M5Stack Cardputer Zero**. It opens one conversation
-per account and workspace. Hold Enter to record, then release to send the audio.
+per account and workspace. Tap Enter to record and tap it again to send.
 The folded reader shows one Markdown reply at a time, with its local send time and
 an index of earlier replies. The built-in interface is in English. Messages use
 their original language.
@@ -59,9 +59,8 @@ version and contents before installing. See [signed updates and recovery](docs/u
 | Page Up / Page Down | Scroll the current reply three lines |
 | Space on the welcome screen | Send Okou on a short orbit |
 | Enter in settings | Open the selected action |
-| Hold Enter in chat | Record while held, then release to send a voice message |
+| Enter in chat | Tap to record. Tap again to send. |
 | Volume up / down, Mute | Adjust system output by 10%, or toggle mute. The screen briefly shows the resulting level. |
-| Space in chat | Play the voice clips associated with the selected reply (or a newly sent recording), pause, or resume |
 | Ctrl+R | Retry a retained recording or failed voice message |
 | Esc while recording/recovering | Discard recording and retained voice work |
 | Esc | Back/menu |
