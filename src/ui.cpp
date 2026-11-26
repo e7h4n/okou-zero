@@ -305,12 +305,14 @@ Action UI::handle(const Input &input) {
     if (page == Page::chat) {
         if (input.key == Key::enter && !input.shift && !input.ctrl && !thread_id.empty()) {
             if (recording) {
+                send_started_ = lv_tick_get();
                 recording = false;
                 voice_pending = voice_working = busy = true;
                 status = "Sending voice message...";
                 return Action::voice;
             }
             if (!busy && !voice_pending && !submitting && !uncertain) {
+                recording_waveform.clear();
                 recording_started = {};
                 recording = voice_working = busy = true;
                 status.clear();
@@ -332,6 +334,7 @@ Action UI::handle(const Input &input) {
             selected = 0;
         } else if (input.key == Key::retry_voice && voice_pending && !busy && !submitting &&
                    !voice_working && !uncertain) {
+            send_started_ = lv_tick_get();
             voice_working = true;
             return Action::voice;
         }
@@ -413,13 +416,21 @@ void UI::dismiss_expired_volume() {
         volume_overlay_ = nullptr;
     }
 }
-void UI::render_recording() {
+void UI::render_voice() {
     auto *panel = shape(body_, 0, 0, 320, 127, 0, paper);
     orbit_->sky(panel);
-    type(panel, "Listening.", 10, 22, 171, ink, display_font_, 38);
-    recording_clock_ = type(panel, "00:00", 12, 64, 143, ink, markdown_fonts_.bold, 22);
-    recording_seconds_ = -1;
-    update_recording_clock();
+    type(panel, recording ? "Listening." : "Sending.", 10, 22, 171, ink, display_font_, 38);
+    if (recording) {
+        recording_clock_ = type(panel, "00:00", 12, 64, 143, ink, markdown_fonts_.bold, 22);
+        recording_seconds_ = -1;
+        update_recording_clock();
+    } else {
+        sending_wave_ = recording_waveform.overview();
+        const auto seconds = static_cast<unsigned>(sending_wave_.samples / 16000);
+        char duration[24];
+        std::snprintf(duration, sizeof(duration), "%02u:%02u", seconds / 60, seconds % 60);
+        type(panel, duration, 12, 64, 143, ink, markdown_fonts_.bold, 22);
+    }
     auto *wave = lv_obj_create(panel);
     lv_obj_remove_style_all(wave);
     lv_obj_set_pos(wave, 12, 85);
@@ -430,23 +441,35 @@ void UI::render_recording() {
             const auto *ui = static_cast<UI *>(lv_event_get_user_data(e));
             lv_area_t a;
             lv_obj_get_coords(lv_event_get_target_obj(e), &a);
-            const auto peaks = ui->recording_waveform.snapshot();
+            const auto peaks =
+                ui->recording ? ui->recording_waveform.snapshot() : ui->sending_wave_.peaks;
+            // Elapsed-time feedback while waiting for the send receipt.
+            const int filled =
+                ui->recording
+                    ? 144
+                    : std::min(139L, std::lround(44 * std::log1p(lv_tick_elaps(ui->send_started_) /
+                                                                 450.0)));
             const auto height = [](int v) {
                 return std::lround(13 * std::log1p(std::abs(v) / 48.) / std::log1p(32768. / 48.));
             };
             draw_segment(e, a, 0, 15, 143, 15, border);
+            if (!ui->recording && filled > 0)
+                draw_segment(e, a, 0, 15, filled, 15, green);
             for (std::size_t i = 0; i < peaks.size(); ++i) {
                 const int x = static_cast<int>(i) * 3;
                 draw_segment(e, a, x, 15 - height(peaks[i].high), x, 15 + height(peaks[i].low),
-                             green);
+                             x < filled ? green : muted);
             }
             for (int x = 0; x <= 144; x += 36)
                 draw_segment(e, a, x, 31, x, 33, border);
         },
         LV_EVENT_DRAW_MAIN, this);
     animate_redraw(wave, 20);
-    orbit_->show(OrbitScene::record);
-    footer_hint("Enter to send", "Esc to cancel");
+    orbit_->show(recording ? OrbitScene::record : OrbitScene::wait);
+    if (recording)
+        footer_hint("Enter to send", "Esc to cancel");
+    else
+        footer_hint("Submitting recording");
 }
 void UI::update_clock() {
     const auto now = std::time(nullptr);
@@ -481,14 +504,11 @@ void UI::render_header() {
     if (battery.charging)
         type(header_, LV_SYMBOL_CHARGE, 237, 1, 12, green, &lv_font_montserrat_12, 15);
 }
-void UI::render_sending(bool accepted) {
+void UI::render_thinking() {
     orbit_->sky(body_);
-    type(body_, accepted ? "Thinking." : "Sending.", 10, 44, 170, ink, display_font_, 38);
-    orbit_->show(accepted ? OrbitScene::wait : OrbitScene::send);
-    if (accepted)
-        footer_hint("", "Enter to record");
-    else
-        footer_hint("Submitting recording");
+    type(body_, "Thinking.", 10, 44, 170, ink, display_font_, 38);
+    orbit_->show(OrbitScene::wait);
+    footer_hint("", "Enter to record");
 }
 void UI::render_reader() {
     // Keep the original message positions to associate user events with the following reply.
@@ -506,7 +526,7 @@ void UI::render_reader() {
     // Stay on the animated panel after acknowledgement until a reply or terminal event arrives.
     if (latest && !messages.empty() && messages.back().role == "user" &&
         !messages.back().terminal && (status.empty() || status == "Message accepted")) {
-        render_sending(true);
+        render_thinking();
         return;
     }
 
@@ -616,7 +636,7 @@ void UI::render() {
     lv_obj_clean(body_);
     lv_obj_clean(footer_);
     if (page == Page::chat && recording) {
-        render_recording();
+        render_voice();
         return;
     }
     if (page == Page::setup) {
@@ -678,7 +698,7 @@ void UI::render() {
         const bool retained = voice_pending && !busy;
         const bool offline = status == "Network unavailable";
         if (!uncertain && !retained && !offline) {
-            render_sending(false);
+            render_voice();
             return;
         }
         const char *title = uncertain  ? "Delivery unconfirmed"
@@ -747,9 +767,10 @@ void UI::demo(const std::string &screen) {
             page = Page::settings;
         else if (screen == "sent")
             messages.push_back({"sent", "user", "[Voice message]", false});
-        else if (screen == "sending")
+        else if (screen == "sending") {
+            send_started_ = lv_tick_get();
             busy = submitting = voice_pending = true;
-        else if (screen == "uncertain")
+        } else if (screen == "uncertain")
             uncertain = true;
         else if (screen == "offline")
             status = "Network unavailable";

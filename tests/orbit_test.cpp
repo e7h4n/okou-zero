@@ -47,14 +47,9 @@ int main() {
             mic.append(speech.data(), speech.size());
             check(quiet != frame(0),
                   "Microphone amplitude must change the orbit at the same instant");
-            art.show(okou::OrbitScene::send);
-            auto departed = frame(120);
-            check(departed != frame(900), "Submitting must move the satellite out");
-            auto arrived = frame(0);
-            check(has_avatar(arrived), "The face must remain visible throughout sending");
-            check(arrived != frame(500), "Sending must stay animated while waiting for a receipt");
             art.show(okou::OrbitScene::wait);
             auto accepted = frame(400);
+            check(has_avatar(accepted), "The face must remain visible while sending or waiting");
             check(accepted != frame(350), "Waiting for a reply must remain animated");
             for (auto scene : {okou::OrbitScene::pairing, okou::OrbitScene::bookmark}) {
                 art.show(scene);
