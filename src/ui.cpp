@@ -166,7 +166,8 @@ lv_obj_t *UI::type(lv_obj_t *parent, const std::string &text, int x, int y, int 
 }
 void UI::footer_hint(const std::string &action, const std::string &secondary) {
     shape(footer_, 8, 0, 304, 1, 0, border);
-    type(footer_, action, 10, 5, secondary.empty() ? 300 : 212, ink, detail_font_, 20);
+    if (!action.empty())
+        type(footer_, action, 10, 5, secondary.empty() ? 300 : 212, ink, detail_font_, 20);
     if (!secondary.empty()) {
         auto *end = type(footer_, secondary, 213, 5, 97, muted, detail_font_, 20);
         lv_obj_set_style_text_align(end, LV_TEXT_ALIGN_RIGHT, 0);
@@ -484,7 +485,9 @@ void UI::render_sending(bool accepted) {
     orbit_->sky(body_);
     type(body_, accepted ? "Thinking." : "Sending.", 10, 44, 170, ink, display_font_, 38);
     orbit_->show(accepted ? OrbitScene::wait : OrbitScene::send);
-    if (!accepted)
+    if (accepted)
+        footer_hint("", "Enter to record");
+    else
         footer_hint("Submitting recording");
 }
 void UI::render_reader() {
