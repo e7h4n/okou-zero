@@ -7,12 +7,14 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstdlib>
 #include <curl/curl.h>
 #include <deque>
 #include <iostream>
+#include <limits>
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <thread>
@@ -24,6 +26,43 @@ namespace {
 std::atomic_bool interrupted{false};
 void interrupt(int) {
     interrupted.store(true);
+}
+// The offline store-review tour uses the same native UI and audio envelope as the
+// live device. Its synthetic samples never open a microphone, speaker, or network.
+struct DemoStep {
+    const char *screen;
+    unsigned duration_ms;
+};
+constexpr DemoStep tour_steps[] = {{"welcome", 2800},   {"login", 2000},    {"empty", 1500},
+                                   {"recording", 4200}, {"sending", 1250},  {"sent", 2300},
+                                   {"chat", 3000},      {"playback", 2300}, {"paused", 1450}};
+void demo_audio(UI &ui, unsigned time_ms, unsigned &last_bin) {
+    if (!ui.recording && ui.playback_status.empty())
+        return;
+    if (ui.playback_status.rfind("Paused", 0) == 0)
+        time_ms = ui.playback.elapsed_ms ? ui.playback.elapsed_ms.load() : 2300;
+    if (!ui.recording) {
+        ui.playback.duration_ms = 4200;
+        ui.playback.elapsed_ms = std::min(4200U, time_ms);
+    }
+    const unsigned bin = time_ms / 16;
+    if (bin == last_bin)
+        return;
+    auto &wave = ui.recording ? ui.recording_waveform : ui.playback.waveform;
+    unsigned first = last_bin < bin ? last_bin + 1 : 0;
+    if (first == 0)
+        wave.clear();
+    // Fill only the visible window if a demo frame was delayed.
+    first = std::max(first, bin > 47 ? bin - 47 : 0);
+    for (unsigned i = first; i <= bin; ++i) {
+        const double t = i * .016,
+                     syllable = std::max(0., std::sin(11 * t + .4)) * std::abs(std::sin(2.8 * t));
+        std::array<std::int16_t, 256> samples{};
+        samples[0] = static_cast<std::int16_t>(15000 * syllable * syllable);
+        samples[1] = -samples[0];
+        wave.append(samples.data(), samples.size());
+    }
+    last_bin = bin;
 }
 using Update = std::function<void(UI &)>;
 class UiWake {
@@ -73,7 +112,7 @@ class Engine {
     std::thread playback_;
     std::atomic_bool playback_active_{false}, playback_paused_{false}, playback_stop_{false};
     std::atomic_bool playback_failed_{false};
-    std::atomic_uint playback_seconds_{0};
+    PlaybackMeter &playback_meter_;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::function<void()>> tasks_;
@@ -141,8 +180,9 @@ class Engine {
     }
 
   public:
-    Engine(Config config, RecordingWaveform &waveform, UiWake &wake)
-        : wake_(wake), session_(std::make_shared<Session>(std::move(config))), waveform_(waveform) {
+    Engine(Config config, RecordingWaveform &waveform, PlaybackMeter &meter, UiWake &wake)
+        : wake_(wake), session_(std::make_shared<Session>(std::move(config))), waveform_(waveform),
+          playback_meter_(meter) {
         worker_ = std::thread([this] {
             while (!stopping_) {
                 std::function<void()> task;
@@ -370,9 +410,6 @@ class Engine {
         playback_stop_ = true;
         playback_failed_ = false;
     }
-    unsigned playback_seconds() const {
-        return playback_seconds_;
-    }
     std::string playback_status() const {
         if (playback_stop_)
             return {};
@@ -391,7 +428,7 @@ class Engine {
         if (playback_.joinable())
             playback_.join();
         playback_stop_ = playback_paused_ = playback_failed_ = false;
-        playback_seconds_ = 0;
+        playback_meter_.reset();
         playback_active_ = true;
         auto s = std::atomic_load(&session_);
         playback_ = std::thread([this, s, clips] {
@@ -419,7 +456,7 @@ class Engine {
                     if (std::fflush(audio.get()) != 0 || std::fseek(audio.get(), 0, SEEK_SET) != 0)
                         throw std::runtime_error("Could not read recording");
                     if (!playback_stop_)
-                        play_wav(audio.get(), playback_paused_, playback_stop_, playback_seconds_);
+                        play_wav(audio.get(), playback_paused_, playback_stop_, playback_meter_);
                 }
             } catch (const std::exception &ex) {
                 if (!playback_stop_) {
@@ -584,11 +621,13 @@ int main(int argc, char **argv) {
             else if (arg == "--config" && i + 1 < argc)
                 config_path = argv[++i];
             else if (arg == "--help") {
-                std::cout << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen "
-                             "login|chat|history|recording|playback|paused|sending|sent|"
-                             "uncertain|offline|update]\n  --screenshot PATH "
-                             "(simulator only)\n "
-                             " --self-test-ui\n";
+                std::cout
+                    << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen "
+                       "tour|welcome|login|expired|empty|chat|history|recording|playback|paused|"
+                       "sending|sent|"
+                       "uncertain|saved|offline|settings|update]\n  --screenshot PATH "
+                       "(simulator only)\n "
+                       " --self-test-ui\n";
                 return 0;
             } else
                 throw std::runtime_error("Unknown command-line option");
@@ -608,11 +647,14 @@ int main(int argc, char **argv) {
         UI ui(display.get());
         UiWake wake;
         std::unique_ptr<Engine> engine;
+        const bool tour = demo && screen == "tour";
+        std::size_t demo_step = 0;
+        unsigned last_demo_bin = std::numeric_limits<unsigned>::max();
         if (demo)
-            ui.demo(screen);
+            ui.demo(tour ? tour_steps[0].screen : screen);
         else {
             ui.busy = true;
-            engine = std::make_unique<Engine>(config, ui.recording_waveform, wake);
+            engine = std::make_unique<Engine>(config, ui.recording_waveform, ui.playback, wake);
             engine->initialize();
         }
         if (self_test) {
@@ -687,6 +729,7 @@ int main(int argc, char **argv) {
         }
         auto last = std::chrono::steady_clock::now();
         auto start = last;
+        auto demo_started = start;
         auto next_battery_read = last;
         bool dirty = true, running = true, restart = false;
         // On the LCD the previous frame is the launcher wallpaper. Keep it on
@@ -724,6 +767,20 @@ int main(int argc, char **argv) {
             const auto elapsed = duration_cast<milliseconds>(now - last);
             lv_tick_inc(static_cast<std::uint32_t>(elapsed.count()));
             last += elapsed;
+            if (demo && !self_test) {
+                auto t =
+                    static_cast<unsigned>(duration_cast<milliseconds>(now - demo_started).count());
+                if (tour && t >= tour_steps[demo_step].duration_ms) {
+                    if (++demo_step == std::size(tour_steps))
+                        break;
+                    ui.demo(tour_steps[demo_step].screen);
+                    demo_started = now;
+                    t = 0;
+                    last_demo_bin = std::numeric_limits<unsigned>::max();
+                    dirty = true;
+                }
+                demo_audio(ui, t, last_demo_bin);
+            }
             if (!demo && now >= next_battery_read) {
                 next_battery_read = now + std::chrono::seconds(5);
                 auto battery = read_battery_status();
@@ -905,8 +962,7 @@ int main(int argc, char **argv) {
                 ui.show_volume(*current_volume);
             ui.dismiss_expired_volume();
             ui.update_clock();
-            if (engine)
-                ui.update_playback_clock(engine->playback_seconds());
+            ui.update_playback_clock();
             ui.update_recording_clock();
             const auto lv_delay = lv_timer_handler();
             display.present();

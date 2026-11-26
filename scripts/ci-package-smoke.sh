@@ -62,6 +62,12 @@ verify_updater_files() {
   sudo visudo -cf "$sudoers"
   [[ $(sudo stat -c '%a' "$sudoers") == 440 ]]
 }
+for asset in assets/orbit/*; do
+  cmp "$asset" "$staging/package/usr/share/okou-zero/orbit/${asset##*/}"
+done
+for license in assets/licenses/*; do
+  cmp "$license" "$staging/package/usr/share/doc/okou-zero/${license##*/}"
+done
 verify_updater_files "$staging/package"
 installation_attempted=true
 sudo apt-get install -y "$package"

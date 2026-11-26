@@ -57,8 +57,8 @@ std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm) {
 }
 
 void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic_bool &stop,
-              std::atomic_uint &seconds) {
-    seconds = 0;
+              PlaybackMeter &meter) {
+    meter.reset();
     std::array<unsigned char, 44> header{};
     auto matches = [&](std::size_t offset, const char *text) {
         return std::memcmp(header.data() + offset, text, 4) == 0;
@@ -109,6 +109,7 @@ void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic
 
     std::array<unsigned char, 640> buffer{};
     const auto total = static_cast<std::size_t>(bytes / 2);
+    meter.duration_ms = static_cast<unsigned>(total / (rate / 1000));
     std::size_t written = 0;
     bool suspended = false;
     while (!stop) {
@@ -134,11 +135,15 @@ void play_wav(std::FILE *file, const std::atomic_bool &paused, const std::atomic
         if (std::fseek(file, static_cast<long>(header.size() + 2 * written), SEEK_SET) != 0 ||
             std::fread(buffer.data(), 2, frames, file) != frames)
             throw std::runtime_error("Could not read recording");
+        std::array<std::int16_t, 320> samples{};
+        for (std::size_t i = 0; i < frames; ++i)
+            samples[i] = static_cast<std::int16_t>(detail::pcm16le(buffer.data() + 2 * i));
         detail::apply_playback_gain(buffer.data(), frames, gain);
         if (pa_simple_write(audio.get(), buffer.data(), frames * 2, nullptr) < 0)
             throw std::runtime_error("Audio playback failed");
         written += frames;
-        seconds = static_cast<unsigned>(written / rate);
+        meter.waveform.append(samples.data(), frames);
+        meter.elapsed_ms = static_cast<unsigned>(written / (rate / 1000));
     }
 }
 

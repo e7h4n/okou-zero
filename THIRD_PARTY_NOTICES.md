@@ -109,3 +109,10 @@ Their license notices are available in the corresponding distribution packages
 under `/usr/share/doc`. The device font is supplied by `fonts-noto-cjk`, not
 bundled into this repository or package. Test TLS certificates are generated
 at test runtime and never installed with the application.
+
+## Pocket Orbit fonts
+
+Geist by the Geist Project Authors and Silkscreen by the Silkscreen Project Authors
+are distributed under the SIL Open Font License 1.1. The device uses two static
+instances of the Geist Latin variable font and the regular Silkscreen face.
+Their full notices are installed in `/usr/share/doc/okou-zero/`.

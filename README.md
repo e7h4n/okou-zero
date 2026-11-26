@@ -22,7 +22,7 @@ sudo apt-get install cmake ninja-build g++ libcurl4-openssl-dev libssl-dev \
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DOKOU_ZERO_DESKTOP=ON
 cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
-./build/okou-zero --demo
+./build/okou-zero --demo-screen tour
 ```
 
 The amd64 CI job builds the simulator. The native arm64 job builds the device
@@ -57,6 +57,7 @@ version and contents before installing. See [signed updates and recovery](docs/u
 | Up / down | Scroll the current reply one line, or select a settings item |
 | Left / right | Jump to the beginning / end of the reply, then to the older / newer reply |
 | Page Up / Page Down | Scroll the current reply three lines |
+| Space on the welcome screen | Send Okou on a short orbit |
 | Enter in settings | Open the selected action |
 | Hold Enter in chat | Record while held, then release to send a voice message |
 | Volume up / down, Mute | Adjust system output by 10%, or toggle mute. The screen briefly shows the resulting level. |

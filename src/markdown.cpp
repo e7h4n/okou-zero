@@ -199,7 +199,7 @@ int render_cell(lv_obj_t *body, const Cell &cell, const Block &block, int x, int
     lv_obj_set_pos(group, x, y);
     bool pre = block.kind == Kind::code;
     if (pre)
-        shade(group, 0x263735);
+        shade(group, 0xdde2d1);
     for (const auto &run : cell) {
         auto *span = lv_spangroup_add_span(group);
         lv_span_set_text(span, run.text.c_str());
@@ -212,9 +212,9 @@ int render_cell(lv_obj_t *body, const Cell &cell, const Block &block, int x, int
         if (font)
             lv_style_set_text_font(style, font);
         if (run.style & link)
-            lv_style_set_text_color(style, lv_color_hex(0x9ef1ce));
+            lv_style_set_text_color(style, lv_color_hex(0x275d54));
         if (run.style & code)
-            lv_style_set_text_color(style, lv_color_hex(0xf2bb79));
+            lv_style_set_text_color(style, lv_color_hex(0x804520));
         unsigned decor = ((run.style & link) ? LV_TEXT_DECOR_UNDERLINE : 0) |
                          ((run.style & strike) ? LV_TEXT_DECOR_STRIKETHROUGH : 0);
         if (decor)
