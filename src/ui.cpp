@@ -55,14 +55,18 @@ lv_obj_t *folded_sheet(lv_obj_t *parent, int x, int y, int width, int height) {
         [](lv_event_t *e) {
             lv_area_t a;
             lv_obj_get_coords(lv_event_get_target_obj(e), &a);
+            // Clear the full corner, including the sheet's last pixel column.
+            lv_area_t corner{a.x2 - fold_size, a.y1, a.x2, a.y1 + fold_size - 1};
+            lv_draw_rect_dsc_t cutout;
+            lv_draw_rect_dsc_init(&cutout);
+            cutout.bg_color = lv_color_hex(paper);
+            lv_draw_rect(lv_event_get_layer(e), &cutout, &corner);
+
             lv_draw_triangle_dsc_t d;
             lv_draw_triangle_dsc_init(&d);
             d.p[0] = {lv_value_precise_t(a.x2 - fold_size), lv_value_precise_t(a.y1)};
-            d.p[1] = {lv_value_precise_t(a.x2), lv_value_precise_t(a.y1)};
-            d.p[2] = {lv_value_precise_t(a.x2), lv_value_precise_t(a.y1 + fold_size)};
-            d.color = lv_color_hex(paper);
-            lv_draw_triangle(lv_event_get_layer(e), &d);
             d.p[1] = {lv_value_precise_t(a.x2 - fold_size), lv_value_precise_t(a.y1 + fold_size)};
+            d.p[2] = {lv_value_precise_t(a.x2), lv_value_precise_t(a.y1 + fold_size)};
             d.color = lv_color_hex(0xbfc8b3);
             lv_draw_triangle(lv_event_get_layer(e), &d);
         },
