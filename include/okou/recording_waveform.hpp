@@ -2,7 +2,6 @@
 #pragma once
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -47,13 +46,5 @@ class RecordingWaveform {
     Envelope history_{};
     Peaks partial_{};
     unsigned frames_ = 0;
-};
-struct PlaybackMeter {
-    RecordingWaveform waveform;
-    std::atomic_uint elapsed_ms{0}, duration_ms{0};
-    void reset() {
-        waveform.clear();
-        elapsed_ms = duration_ms = 0;
-    }
 };
 } // namespace okou

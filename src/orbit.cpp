@@ -62,9 +62,8 @@ void star(lv_layer_t *layer, Point c, double size) {
 }
 } // namespace
 
-PocketOrbit::PocketOrbit(lv_obj_t *root, const RecordingWaveform &mic,
-                         const PlaybackMeter &playback)
-    : directory(asset_directory()), microphone_(mic), playback_(playback),
+PocketOrbit::PocketOrbit(lv_obj_t *root, const RecordingWaveform &mic)
+    : directory(asset_directory()), microphone_(mic),
       sky_path_("A:" + (directory / "sky.png").string()),
       avatar_path_("A:" + (directory / "avatar.png").string()),
       blink_path_("A:" + (directory / "avatar-blink.png").string()) {
@@ -84,8 +83,7 @@ PocketOrbit::PocketOrbit(lv_obj_t *root, const RecordingWaveform &mic,
         [](lv_timer_t *timer) {
             auto &art = *static_cast<PocketOrbit *>(lv_timer_get_user_data(timer));
             lv_obj_invalidate(art.object_);
-            const auto duration = art.scene_ == OrbitScene::send ? 900U : 340U;
-            if (!art.continuous() && lv_tick_elaps(art.entered_) >= duration)
+            if (!art.continuous() && lv_tick_elaps(art.entered_) >= 340U)
                 lv_timer_pause(timer);
         },
         50, this);
@@ -108,7 +106,7 @@ void PocketOrbit::sky(lv_obj_t *parent) const {
 }
 bool PocketOrbit::continuous() const {
     return scene_ == OrbitScene::welcome || scene_ == OrbitScene::record ||
-           scene_ == OrbitScene::play || scene_ == OrbitScene::wait;
+           scene_ == OrbitScene::send || scene_ == OrbitScene::wait;
 }
 PocketOrbit::Pose PocketOrbit::pose(uint32_t age) const {
     Pose to{};
@@ -123,12 +121,10 @@ PocketOrbit::Pose PocketOrbit::pose(uint32_t age) const {
         to = {233, 78, 35};
         break;
     case OrbitScene::record:
-    case OrbitScene::play:
-    case OrbitScene::pause:
         to = {233, 77, 39};
         break;
     case OrbitScene::send:
-        to = {286, 73, 10};
+        to = {244, 73, 36};
         break;
     case OrbitScene::wait:
         to = {233, 77, 35};
@@ -172,24 +168,19 @@ void PocketOrbit::draw(lv_event_t *event) const {
     auto *layer = lv_event_get_layer(event);
     const double r = p.radius;
     double phase = .75, level = 0;
-    if (scene_ == OrbitScene::record || scene_ == OrbitScene::play || scene_ == OrbitScene::pause) {
-        const auto peaks =
-            (scene_ == OrbitScene::record ? microphone_ : playback_.waveform).snapshot();
+    if (scene_ == OrbitScene::record) {
+        const auto peaks = microphone_.snapshot();
         int amplitude = 0;
         for (size_t i = peaks.size() - 4; i < peaks.size(); ++i)
             amplitude = std::max({amplitude, -int(peaks[i].low), int(peaks[i].high)});
         level = std::log1p(amplitude / 120.) / std::log1p(32768. / 120.);
-        phase += (scene_ == OrbitScene::record ? age : playback_.elapsed_ms.load()) * .0012;
+        phase += age * .0012;
     } else if (scene_ == OrbitScene::wait || scene_ == OrbitScene::welcome)
         phase += age * (scene_ == OrbitScene::wait ? .001 : .0008);
     if (scene_ == OrbitScene::send) {
-        const double flight = smooth(age / 900.);
-        ring(layer, {area.x1 - left + 224., area.y1 - top + 81.}, 57, 13, .45, pi * 1.82, 0x536677);
-        line(layer, {c.x - 10 - 48 * flight, c.y + 4 + 8 * flight}, {c.x - 5, c.y + 1}, moss);
-        const double packet = std::min(r, 22.);
-        ring(layer, c, packet, packet * .42, 0, tau, pale);
-        star(layer, c, std::max(2., packet * .29));
-        return;
+        phase += age * .004;
+        c.x += 5 * std::sin(phase);
+        c.y -= 3 * std::sin(2 * phase);
     }
     if (r < 14) {
         ring(layer, c, r * 1.18, r * .46, 0, tau, pale);

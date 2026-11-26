@@ -158,9 +158,6 @@ std::vector<Input> Keyboard::poll(bool wake_only) {
             }
             if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
                 result.push_back({Key::enter_cancel, {}});
-            if (event.type == SDL_KEYUP &&
-                (event.key.keysym.sym == SDLK_RETURN || event.key.keysym.sym == SDLK_KP_ENTER))
-                result.push_back({Key::enter_up, {}});
             if (event.type != SDL_KEYDOWN)
                 continue;
             auto mod = event.key.keysym.mod;
@@ -176,7 +173,7 @@ std::vector<Input> Keyboard::poll(bool wake_only) {
             case SDLK_RETURN:
             case SDLK_KP_ENTER:
                 if (!event.key.repeat)
-                    out.key = Key::enter_down;
+                    out.key = Key::enter;
                 break;
             case SDLK_VOLUMEUP:
                 out.key = Key::volume_up;
@@ -300,9 +297,8 @@ std::vector<Input> Keyboard::poll(bool wake_only) {
             continue;
         }
         if (event.code == KEY_ENTER || event.code == KEY_KPENTER) {
-            if (event.value != 2)
-                result.push_back(
-                    {event.value ? Key::enter_down : Key::enter_up, {}, shift_, ctrl_});
+            if (event.value == 1)
+                result.push_back({Key::enter, {}, shift_, ctrl_});
             continue;
         }
         if (!event.value ||

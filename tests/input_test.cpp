@@ -35,10 +35,10 @@ int main() {
         emit(EV_KEY, KEY_ENTER, 1);
         emit(EV_KEY, KEY_ENTER, 2);
         auto events = keyboard.poll();
-        check(events.size() == 1 && events[0].key == Key::enter_down);
+        check(events.size() == 1 && events[0].key == Key::enter);
         emit(EV_KEY, KEY_ENTER, 0);
         events = keyboard.poll();
-        check(events.size() == 1 && events[0].key == Key::enter_up);
+        check(events.empty());
         emit(EV_SYN, SYN_DROPPED, 0);
         emit(EV_KEY, KEY_ENTER, 0); // Discard the out-of-sync release.
         emit(EV_SYN, SYN_REPORT, 0);
@@ -46,7 +46,7 @@ int main() {
         emit(EV_KEY, KEY_KPENTER, 1);
         events = keyboard.poll();
         check(events.size() == 2 && events[0].key == Key::enter_cancel &&
-              events[1].key == Key::enter_down && events[1].shift);
+              events[1].key == Key::enter && events[1].shift);
         emit(EV_KEY, KEY_VOLUMEUP, 1);
         emit(EV_KEY, KEY_VOLUMEUP, 2);
         emit(EV_KEY, KEY_VOLUMEUP, 0);
@@ -59,7 +59,7 @@ int main() {
               events[1].key == Key::volume_up && events[2].key == Key::volume_down &&
               events[3].key == Key::mute);
         // The wake gesture may span several event batches. Neither repeats nor release
-        // may leak through to push-to-talk, but the next deliberate press must work.
+        // may leak through to recording, but the next deliberate press must work.
         emit(EV_KEY, KEY_ENTER, 1);
         check(keyboard.poll(true).empty() && keyboard.activity());
         emit(EV_KEY, KEY_ENTER, 2);
@@ -68,8 +68,7 @@ int main() {
         emit(EV_KEY, KEY_ENTER, 1);
         emit(EV_KEY, KEY_ENTER, 0);
         events = keyboard.poll();
-        check(events.size() == 2 && events[0].key == Key::enter_down &&
-              events[1].key == Key::enter_up);
+        check(events.size() == 1 && events[0].key == Key::enter);
         close(ports[0]);
         close(ports[1]);
         std::string text = "a中🙂";

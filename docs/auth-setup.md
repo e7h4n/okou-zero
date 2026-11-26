@@ -10,7 +10,7 @@ For a custom build, enable the device authorization grant and refresh tokens on 
 Clerk OAuth application. Set the public client ID at build time with
 `-DOKOU_ZERO_OAUTH_CLIENT_ID=YOUR_PUBLIC_CLIENT_ID` or enter it on the handheld's setup
 screen. The client requests `openid profile offline_access user:org:read okou:chat:read
-okou:chat:send`. Reading history, realtime notifications and playback use chat read access.
+okou:chat:send`. Reading history and realtime notifications use chat read access.
 Creating the fixed thread, uploading private audio and sending its clip use chat send access.
 
 ## Bundled defaults

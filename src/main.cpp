@@ -1,4 +1,3 @@
-#include "disk_file.hpp"
 #include "idle_display.hpp"
 #include "okou/diagnostics.hpp"
 #include "okou/ui.hpp"
@@ -33,22 +32,16 @@ struct DemoStep {
     const char *screen;
     unsigned duration_ms;
 };
-constexpr DemoStep tour_steps[] = {{"welcome", 2800},   {"login", 2000},    {"empty", 1500},
-                                   {"recording", 4200}, {"sending", 1250},  {"sent", 2300},
-                                   {"chat", 3000},      {"playback", 2300}, {"paused", 1450}};
+constexpr DemoStep tour_steps[] = {{"welcome", 2800},   {"login", 2000},   {"empty", 1500},
+                                   {"recording", 4200}, {"sending", 1250}, {"sent", 2300},
+                                   {"chat", 3000}};
 void demo_audio(UI &ui, unsigned time_ms, unsigned &last_bin) {
-    if (!ui.recording && ui.playback_status.empty())
+    if (!ui.recording)
         return;
-    if (ui.playback_status.rfind("Paused", 0) == 0)
-        time_ms = ui.playback.elapsed_ms ? ui.playback.elapsed_ms.load() : 2300;
-    if (!ui.recording) {
-        ui.playback.duration_ms = 4200;
-        ui.playback.elapsed_ms = std::min(4200U, time_ms);
-    }
     const unsigned bin = time_ms / 16;
     if (bin == last_bin)
         return;
-    auto &wave = ui.recording ? ui.recording_waveform : ui.playback.waveform;
+    auto &wave = ui.recording_waveform;
     unsigned first = last_bin < bin ? last_bin + 1 : 0;
     if (first == 0)
         wave.clear();
@@ -109,10 +102,6 @@ class Engine {
     std::string voice_file_id_;
     std::string voice_thread_;
     std::atomic_bool voice_cancelled_{false};
-    std::thread playback_;
-    std::atomic_bool playback_active_{false}, playback_paused_{false}, playback_stop_{false};
-    std::atomic_bool playback_failed_{false};
-    PlaybackMeter &playback_meter_;
     std::mutex mutex_;
     std::condition_variable cv_;
     std::deque<std::function<void()>> tasks_;
@@ -180,9 +169,8 @@ class Engine {
     }
 
   public:
-    Engine(Config config, RecordingWaveform &waveform, PlaybackMeter &meter, UiWake &wake)
-        : wake_(wake), session_(std::make_shared<Session>(std::move(config))), waveform_(waveform),
-          playback_meter_(meter) {
+    Engine(Config config, RecordingWaveform &waveform, UiWake &wake)
+        : wake_(wake), session_(std::make_shared<Session>(std::move(config))), waveform_(waveform) {
         worker_ = std::thread([this] {
             while (!stopping_) {
                 std::function<void()> task;
@@ -208,9 +196,6 @@ class Engine {
         auto s = std::atomic_load(&session_);
         s->cancelled = true;
         cv_.notify_all();
-        stop_playback();
-        if (playback_.joinable())
-            playback_.join();
         if (worker_.joinable())
             worker_.join();
         realtime_.reset();
@@ -406,68 +391,6 @@ class Engine {
             });
         });
     }
-    void stop_playback() {
-        playback_stop_ = true;
-        playback_failed_ = false;
-    }
-    std::string playback_status() const {
-        if (playback_stop_)
-            return {};
-        if (playback_active_)
-            return playback_paused_ ? "Paused   Space resume" : "Playing   Space pause";
-        return playback_failed_ ? "Could not play recording" : "";
-    }
-    void toggle_playback(const std::vector<std::string> &clips) {
-        if (playback_active_) {
-            if (!playback_stop_)
-                playback_paused_ = !playback_paused_.load();
-            return;
-        }
-        if (clips.empty())
-            return;
-        if (playback_.joinable())
-            playback_.join();
-        playback_stop_ = playback_paused_ = playback_failed_ = false;
-        playback_meter_.reset();
-        playback_active_ = true;
-        auto s = std::atomic_load(&session_);
-        playback_ = std::thread([this, s, clips] {
-            try {
-                Http storage(&playback_stop_);
-                for (const auto &id : clips) {
-                    if (playback_stop_)
-                        break;
-                    std::string url;
-                    {
-                        std::lock_guard<std::mutex> guard(s->io);
-                        if (playback_stop_)
-                            break;
-                        ensure(*s);
-                        url = s->client->voice_playback_url(id);
-                    }
-                    DiskFile spool;
-                    auto close_file = [](std::FILE *file) { std::fclose(file); };
-                    std::unique_ptr<std::FILE, decltype(close_file)> audio(spool.stream(),
-                                                                           close_file);
-                    auto response =
-                        storage.request("GET", url, {}, {}, {}, audio.get(), 25U * 1024U * 1024U);
-                    if (response.status != 200)
-                        throw HttpError(response.status, "Recording download failed");
-                    if (std::fflush(audio.get()) != 0 || std::fseek(audio.get(), 0, SEEK_SET) != 0)
-                        throw std::runtime_error("Could not read recording");
-                    if (!playback_stop_)
-                        play_wav(audio.get(), playback_paused_, playback_stop_, playback_meter_);
-                }
-            } catch (const std::exception &ex) {
-                if (!playback_stop_) {
-                    diagnostics::log_error(diagnostics::Stage::voice, ex);
-                    playback_failed_ = true;
-                }
-            }
-            playback_active_ = false;
-            wake_.notify();
-        });
-    }
     void voice(bool finish, const std::string &thread_id) {
         if (!finish)
             voice_cancelled_ = false;
@@ -524,9 +447,9 @@ class Engine {
                                  : s->client->send_voice(thread_id, voice_file_id_);
                 }
                 voice_pcm_ = std::vector<std::int16_t>();
-                emit([id = thread_id, result = std::move(result),
-                      file_id = std::exchange(voice_file_id_, {})](UI &ui) {
-                    ui.complete_send(id, result, file_id);
+                voice_file_id_.clear();
+                emit([id = thread_id, result = std::move(result)](UI &ui) {
+                    ui.complete_send(id, result);
                     ui.busy = false;
                     ui.status =
                         result.uncertain ? "Send uncertain; do not resend" : "Message accepted";
@@ -621,13 +544,12 @@ int main(int argc, char **argv) {
             else if (arg == "--config" && i + 1 < argc)
                 config_path = argv[++i];
             else if (arg == "--help") {
-                std::cout
-                    << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen "
-                       "tour|welcome|login|expired|empty|chat|history|recording|playback|paused|"
-                       "sending|sent|"
-                       "uncertain|saved|offline|settings|update]\n  --screenshot PATH "
-                       "(simulator only)\n "
-                       " --self-test-ui\n";
+                std::cout << "Okou Zero\n  --version\n  --config PATH\n  --demo [--demo-screen "
+                             "tour|welcome|login|expired|empty|chat|history|recording|"
+                             "sending|sent|"
+                             "uncertain|saved|offline|settings|update]\n  --screenshot PATH "
+                             "(simulator only)\n "
+                             " --self-test-ui\n";
                 return 0;
             } else
                 throw std::runtime_error("Unknown command-line option");
@@ -654,7 +576,7 @@ int main(int argc, char **argv) {
             ui.demo(tour ? tour_steps[0].screen : screen);
         else {
             ui.busy = true;
-            engine = std::make_unique<Engine>(config, ui.recording_waveform, ui.playback, wake);
+            engine = std::make_unique<Engine>(config, ui.recording_waveform, wake);
             engine->initialize();
         }
         if (self_test) {
@@ -664,52 +586,38 @@ int main(int argc, char **argv) {
             };
             ui.demo("chat");
             check(ui.page == Page::chat && !ui.thread_id.empty());
-            ui.complete_send(ui.thread_id, {"voice_event", false}, "new-clip");
+            ui.complete_send(ui.thread_id, {"voice_event", false});
             ui.render();
-            check(ui.visible_voice_clips == std::vector<std::string>{"new-clip"});
             check(ui.messages.back().id == "voice_event");
             ui.update_history({});
             check(ui.messages.size() == 1);
             ui.update_history({{"voice_event", "user", "spoken message", false}});
-            ui.complete_send(ui.thread_id, {"voice_event", false}, "new-clip");
+            ui.complete_send(ui.thread_id, {"voice_event", false});
             check(ui.messages.size() == 1);
             check(!ui.take_local_reply());
             std::vector<Message> history{
-                {"voice_event", "user", "spoken message", false, {}, {}, "local"},
-                {"unrelated", "assistant", "Other reply", true, {}, {}, "other"}};
+                {"voice_event", "user", "spoken message", false, {}, "local"},
+                {"unrelated", "assistant", "Other reply", true, {}, "other"}};
             ui.update_history(history);
             check(!ui.take_local_reply());
-            history.push_back({"answer", "assistant", "Reply", true, {}, {}, "local"});
+            history.push_back({"answer", "assistant", "Reply", true, {}, "local"});
             ui.update_history(history);
             check(ui.take_local_reply() && !ui.take_local_reply());
             ui.update_history({});
             check(ui.messages.empty());
-            ui.complete_send(ui.thread_id, {"voice_event", true}, "new-clip");
+            ui.complete_send(ui.thread_id, {"voice_event", true});
             check(ui.uncertain && ui.messages.empty());
             ui.reconcile_send(ui.thread_id, false);
             check(!ui.uncertain);
-            ui.messages = {{"old", "user", "[Voice message]", false, {"old-clip"}},
-                           {"middle", "assistant", "1\n2\n3\n4\n5\n6\n7\n8\n9", false},
-                           {"current", "user", "[Voice message]", false, {"current-clip"}},
-                           {"latest", "assistant", "Current reply", false}};
-            ui.render();
-            check(ui.visible_voice_clips == std::vector<std::string>{"current-clip"});
-            check(ui.handle({Key::space, " "}) == Action::playback);
-            ui.handle({Key::left, {}});
-            ui.render();
-            ui.handle({Key::down, {}});
-            ui.render();
-            check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
-            ui.handle({Key::right, {}});
-            ui.render();
-            check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
-            ui.handle({Key::right, {}});
-            ui.render();
-            check(ui.visible_voice_clips == std::vector<std::string>{"current-clip"});
-            for (int i = 0; i < 8; ++i)
-                ui.handle({Key::left, {}});
-            ui.render();
-            check(ui.visible_voice_clips == std::vector<std::string>{"old-clip"});
+            ui.demo("sent");
+            check(ui.handle({Key::enter, {}}) == Action::start_recording && ui.recording);
+            check(ui.handle({Key::enter, {}}) == Action::voice && !ui.recording);
+            check(ui.handle({Key::enter, {}}) == Action::none);
+            ui.demo("history");
+            check(ui.handle({Key::enter, {}}) == Action::start_recording);
+            check(ui.handle({Key::escape, {}}) == Action::discard_recording);
+            check(!ui.recording && ui.page == Page::chat);
+            ui.demo("history");
             ui.handle({Key::escape, {}, false, false});
             check(ui.page == Page::settings);
             ui.handle({Key::escape, {}, false, false});
@@ -737,9 +645,6 @@ int main(int argc, char **argv) {
         bool awaiting_first_screen = !OKOU_ZERO_DESKTOP && !demo;
         UpdateProcess updater;
         VolumeControl volume;
-        constexpr auto enter_hold_delay = std::chrono::milliseconds(350);
-        std::chrono::steady_clock::time_point enter_pressed{};
-        std::string enter_thread;
         if (!demo)
             updater.start(false, OKOU_ZERO_VERSION);
         using namespace std::chrono;
@@ -795,13 +700,6 @@ int main(int argc, char **argv) {
                 dirty = true;
                 reply = ui.take_local_reply();
             }
-            if (engine) {
-                auto playback = engine->playback_status();
-                if (ui.playback_status != playback) {
-                    ui.playback_status = std::move(playback);
-                    dirty = true;
-                }
-            }
             if (updater.poll()) {
                 ui.update_message = update_hint(updater.view());
                 dirty = true;
@@ -845,47 +743,6 @@ int main(int argc, char **argv) {
                         volume.press(input.key);
                     continue;
                 }
-                if (input.key == Key::escape)
-                    enter_thread.clear();
-                if (input.key == Key::enter_cancel) {
-                    enter_thread.clear();
-                    if (engine && ui.recording)
-                        engine->cancel_voice();
-                    continue;
-                }
-                if (input.key == Key::enter_down) {
-                    if (ui.page == Page::chat) {
-                        if (engine && !input.shift && !input.ctrl && !ui.thread_id.empty() &&
-                            !ui.busy && !ui.recording && !ui.voice_pending && !ui.submitting &&
-                            !ui.uncertain && enter_thread.empty()) {
-                            enter_thread = ui.thread_id;
-                            enter_pressed = std::chrono::steady_clock::now();
-                            ui.recording_started = {};
-                            ui.recording = ui.voice_working = ui.busy = true;
-                            engine->stop_playback();
-                            engine->voice(false, ui.thread_id);
-                            dirty = true;
-                        }
-                        continue;
-                    }
-                    input.key = Key::enter;
-                } else if (input.key == Key::enter_up) {
-                    const bool same_chat = ui.page == Page::chat && !enter_thread.empty() &&
-                                           enter_thread == ui.thread_id;
-                    enter_thread.clear();
-                    if (engine && same_chat && ui.recording) {
-                        ui.recording = false;
-                        ui.voice_pending = ui.voice_working = ui.busy = true;
-                        if (std::chrono::steady_clock::now() - enter_pressed < enter_hold_delay) {
-                            engine->cancel_voice();
-                        } else {
-                            ui.status = "Sending voice message...";
-                            engine->voice(true, ui.thread_id);
-                        }
-                        dirty = true;
-                    }
-                    continue;
-                }
                 if (input.key == Key::update) {
                     if (updater.view().status == UpdateStatus::ready) {
                         if (!ui.update_safe())
@@ -898,18 +755,7 @@ int main(int argc, char **argv) {
                     }
                     continue;
                 }
-                if ((ui.recording || ui.voice_pending) && input.key == Key::escape) {
-                    if (engine) {
-                        ui.busy = true;
-                        engine->cancel_voice();
-                    }
-                    dirty = true;
-                    continue;
-                }
-                const auto prev_page = ui.page;
                 auto action = ui.handle(input);
-                if (engine && prev_page == Page::chat && ui.page != Page::chat)
-                    engine->stop_playback();
                 dirty = true;
                 if (action == Action::quit) {
                     running = false;
@@ -917,7 +763,7 @@ int main(int argc, char **argv) {
                 }
                 if (!engine)
                     continue;
-                if (action != Action::none && action != Action::playback)
+                if (action != Action::none)
                     ui.busy = true;
                 switch (action) {
                 case Action::login:
@@ -929,9 +775,11 @@ int main(int argc, char **argv) {
                 case Action::refresh:
                     engine->open_fixed_chat();
                     break;
-                case Action::playback:
-                    ui.render();
-                    engine->toggle_playback(ui.visible_voice_clips);
+                case Action::start_recording:
+                    engine->voice(false, ui.thread_id);
+                    break;
+                case Action::discard_recording:
+                    engine->cancel_voice();
                     break;
                 case Action::voice:
                     engine->voice(true, ui.thread_id);
@@ -962,7 +810,6 @@ int main(int argc, char **argv) {
                 ui.show_volume(*current_volume);
             ui.dismiss_expired_volume();
             ui.update_clock();
-            ui.update_playback_clock();
             ui.update_recording_clock();
             const auto lv_delay = lv_timer_handler();
             display.present();

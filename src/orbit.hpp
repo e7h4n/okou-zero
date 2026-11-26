@@ -5,24 +5,13 @@
 #include <filesystem>
 
 namespace okou {
-enum class OrbitScene {
-    welcome,
-    pairing,
-    ready,
-    record,
-    play,
-    pause,
-    send,
-    wait,
-    bookmark,
-    marker
-};
+enum class OrbitScene { welcome, pairing, ready, record, send, wait, bookmark, marker };
 
 // A single persistent object carries the satellite between panels. Only its clipped
 // drawing area is invalidated, and static states stop the timer after settling.
 class PocketOrbit {
   public:
-    PocketOrbit(lv_obj_t *root, const RecordingWaveform &microphone, const PlaybackMeter &playback);
+    PocketOrbit(lv_obj_t *root, const RecordingWaveform &microphone);
     ~PocketOrbit();
     PocketOrbit(const PocketOrbit &) = delete;
     PocketOrbit &operator=(const PocketOrbit &) = delete;
@@ -36,7 +25,6 @@ class PocketOrbit {
         double x, y, radius;
     };
     const RecordingWaveform &microphone_;
-    const PlaybackMeter &playback_;
     std::string sky_path_, avatar_path_, blink_path_;
     lv_obj_t *object_;
     lv_timer_t *timer_;

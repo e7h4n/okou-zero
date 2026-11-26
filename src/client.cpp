@@ -391,23 +391,6 @@ std::vector<Message> present(const History &h) {
             m.role = "user";
             if (auto origin = input_origins.find(id); origin != input_origins.end())
                 m.id = origin->second;
-            auto doc = p.value("userMessage", Json::object());
-            bool unsupported = false;
-            if (doc.is_object() && doc.contains("parts") && doc["parts"].is_array())
-                for (const auto &part : doc["parts"]) {
-                    if (str(part, "type") == "text")
-                        m.text += str(part, "text");
-                    else if (str(part, "type") == "voice") {
-                        m.text += m.text.empty() ? "[Voice message]" : "\n[Voice message]";
-                        for (const auto &clip : part.at("clips"))
-                            if (m.voice_clips.size() < 32)
-                                m.voice_clips.push_back(clip.get<std::string>());
-                    } else
-                        unsupported = true;
-                }
-            if (unsupported)
-                m.text += m.text.empty() ? "[Attachment or action: review in Okou Web]"
-                                         : "\n[Attachment or action: review in Okou Web]";
         } else if (type == "output.message") {
             m.role = "assistant";
             m.local_sent_at = local_sent_time(str(r, "createdAt"));
@@ -432,7 +415,7 @@ std::vector<Message> present(const History &h) {
             m.text = "Action requires review in Okou Web. This client cannot approve it.";
         } else
             continue;
-        if (m.text.empty())
+        if (m.role != "user" && m.text.empty())
             continue;
         m.text = clipped(std::move(m.text), 32768);
         if (!run.empty())
@@ -611,15 +594,6 @@ bool Client::has_pending_send(const std::string &thread_id) const {
         invalid();
     return !pending.is_null();
 }
-std::string Client::voice_playback_url(const std::string &file_id) {
-    if (!is_uuid(file_id))
-        throw std::runtime_error("Invalid voice clip identity");
-    auto url = str(tool("get_voice_playback_url", {{"fileId", file_id}}), "url");
-    if (url.empty())
-        invalid();
-    return url;
-}
-
 std::string Client::upload_voice(const std::vector<std::int16_t> &pcm) {
     constexpr auto limit = 25U * 1024U * 1024U;
     constexpr auto mime = "audio/wav";

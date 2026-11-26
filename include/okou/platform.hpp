@@ -15,8 +15,6 @@ enum class Key {
     volume_down,
     mute,
     enter,
-    enter_down,
-    enter_up,
     enter_cancel,
     backspace,
     escape,

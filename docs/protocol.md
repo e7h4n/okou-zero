@@ -5,7 +5,7 @@
 All authenticated Okou chat operations use `POST https://api.okou.ai/mcp`. This
 is the only production endpoint that receives an Okou bearer authorization header.
 The device uploads WAVs to an HTTPS Cloudflare R2 endpoint returned by `prepare_voice_upload`.
-Snapshot and playback downloads use signed GET URLs supplied by MCP. File transfers
+Snapshot downloads use signed GET URLs supplied by MCP. File transfers
 carry no Okou access token and do not follow redirects.
 
 Device sign-in, token renewal and revocation use the [OAuth endpoints](auth-setup.md).
@@ -37,16 +37,15 @@ Approval links and unsupported actions direct the reader to Okou Web. Input
 metadata and tool events are omitted from the reader.
 
 An input carrying `revokesEventId` replaces the referenced row and retains the
-original input identity for playback and acknowledgement. Independent sends of the
+original input identity for acknowledgement. Independent sends of the
 same clip remain distinct. Run completion, cancellation and failure apply only to
 rows with the matching run ID.
 
 ## Voice messages
 
-Holding Enter captures 16 kHz mono PCM16 through the configured ALSA device
-(default `pulse`) for up to ten minutes. Releasing Enter after a hold of at least
-350 ms sends the recording. Shorter taps discard it. The waveform uses the captured
-sample peaks.
+Tap Enter to capture 16 kHz mono PCM16 through the configured ALSA device
+(default `pulse`) for up to ten minutes. Tap Enter again to send, or press Esc to
+discard. The waveform uses the captured sample peaks.
 
 1. Call `prepare_voice_upload` with the WAV filename and byte count.
 2. PUT the audio to the signed URL with its upload headers and call `complete_voice_upload`.
@@ -59,11 +58,6 @@ account- and thread-scoped ledger. A matching successful response clears the res
 4xx rejections also clear it, except 408 and 409. An ambiguous response keeps the
 reservation across restarts. A complete, validated history read releases it after
 finding the matching input ID or its promotion.
-
-An acknowledged recording is playable immediately. Space selects clips associated
-with the current reply or a newly sent recording. Playback obtains a signed URL from
-`get_voice_playback_url`, spools the WAV to disk and plays it through
-PulseAudio. Pause and resume keep the playback position.
 
 ## Realtime
 
