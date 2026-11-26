@@ -106,7 +106,7 @@ void PocketOrbit::sky(lv_obj_t *parent) const {
 }
 bool PocketOrbit::continuous() const {
     return scene_ == OrbitScene::welcome || scene_ == OrbitScene::record ||
-           scene_ == OrbitScene::send || scene_ == OrbitScene::wait;
+           scene_ == OrbitScene::wait;
 }
 PocketOrbit::Pose PocketOrbit::pose(uint32_t age) const {
     Pose to{};
@@ -121,13 +121,10 @@ PocketOrbit::Pose PocketOrbit::pose(uint32_t age) const {
         to = {233, 78, 35};
         break;
     case OrbitScene::record:
-        to = {233, 77, 39};
-        break;
-    case OrbitScene::send:
-        to = {244, 73, 36};
+        to = {233, 84, 39};
         break;
     case OrbitScene::wait:
-        to = {233, 77, 35};
+        to = {233, 84, 35};
         break;
     case OrbitScene::bookmark:
         to = {293, double(marker_y_), 6};
@@ -138,7 +135,7 @@ PocketOrbit::Pose PocketOrbit::pose(uint32_t age) const {
     }
     if (!shown_)
         return to;
-    const double f = smooth(double(age) / (scene_ == OrbitScene::send ? 900 : 340));
+    const double f = smooth(double(age) / 340);
     return {from_.x + (to.x - from_.x) * f, from_.y + (to.y - from_.y) * f,
             from_.radius + (to.radius - from_.radius) * f};
 }
@@ -177,11 +174,6 @@ void PocketOrbit::draw(lv_event_t *event) const {
         phase += age * .0012;
     } else if (scene_ == OrbitScene::wait || scene_ == OrbitScene::welcome)
         phase += age * (scene_ == OrbitScene::wait ? .001 : .0008);
-    if (scene_ == OrbitScene::send) {
-        phase += age * .004;
-        c.x += 5 * std::sin(phase);
-        c.y -= 3 * std::sin(2 * phase);
-    }
     if (r < 14) {
         ring(layer, c, r * 1.18, r * .46, 0, tau, pale);
         dot(layer, c, std::max(1., r * .20), lime);

@@ -36,17 +36,15 @@ constexpr DemoStep tour_steps[] = {{"welcome", 2800},   {"login", 2000},   {"emp
                                    {"recording", 4200}, {"sending", 1250}, {"sent", 2300},
                                    {"chat", 3000}};
 void demo_audio(UI &ui, unsigned time_ms, unsigned &last_bin) {
-    if (!ui.recording)
+    if (!ui.recording && !ui.submitting)
         return;
-    const unsigned bin = time_ms / 16;
+    const unsigned bin = (ui.submitting ? 4200 : time_ms) / 16;
     if (bin == last_bin)
         return;
     auto &wave = ui.recording_waveform;
     unsigned first = last_bin < bin ? last_bin + 1 : 0;
     if (first == 0)
         wave.clear();
-    // Fill only the visible window if a demo frame was delayed.
-    first = std::max(first, bin > 47 ? bin - 47 : 0);
     for (unsigned i = first; i <= bin; ++i) {
         const double t = i * .016,
                      syllable = std::max(0., std::sin(11 * t + .4)) * std::abs(std::sin(2.8 * t));

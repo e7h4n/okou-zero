@@ -104,7 +104,6 @@ struct AudioCapture::Impl {
                 break;
             }
         }
-        waveform.clear();
     }
     void join() noexcept {
         stop.store(true);

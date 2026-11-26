@@ -65,6 +65,21 @@ int main() {
     block.front() = 0;
     wave.append(block.data(), block.size());
     check(wave.snapshot().back().low == 0, "A new capture discards the previous partial column");
+    wave.clear();
+    block.fill(0);
+    block.front() = -30000;
+    wave.append(block.data(), block.size());
+    block.front() = 0;
+    for (int i = 0; i < 37498; ++i)
+        wave.append(block.data(), block.size());
+    block.front() = 22000;
+    wave.append(block.data(), 3);
+    const auto overview = wave.overview();
+    check(overview.samples == 37499 * 256 + 3 && overview.peaks.front().low == -30000 &&
+              overview.peaks[24].high == 0 && overview.peaks.back().high == 22000,
+          "Ten-minute overview retains the beginning, silence and partial final bin");
+    wave.clear();
+    check(wave.overview().samples == 0, "New recordings reset the full waveform");
     // No start() call: these lifecycle checks must never open a capture device.
     okou::AudioCapture audio("not-opened-by-tests");
     check(audio.finish().empty(), "Finish before start is empty");

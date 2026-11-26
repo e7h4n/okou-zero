@@ -77,9 +77,11 @@ class UI {
     std::time_t clock_minute_ = -1;
     int turn_direction_ = 0;
     int reading_line_ = 22;
-    void render_recording();
+    void render_voice();
+    RecordingWaveform::Overview sending_wave_;
+    uint32_t send_started_ = 0;
     void render_reader();
-    void render_sending(bool accepted);
+    void render_thinking();
     void footer_hint(const std::string &action, const std::string &secondary = {});
     lv_obj_t *type(lv_obj_t *parent, const std::string &text, int x, int y, int width,
                    std::uint32_t color, const lv_font_t *font, int height = 0);

@@ -5,7 +5,7 @@
 #include <filesystem>
 
 namespace okou {
-enum class OrbitScene { welcome, pairing, ready, record, send, wait, bookmark, marker };
+enum class OrbitScene { welcome, pairing, ready, record, wait, bookmark, marker };
 
 // A single persistent object carries the satellite between panels. Only its clipped
 // drawing area is invalidated, and static states stop the timer after settling.
