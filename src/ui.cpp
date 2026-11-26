@@ -46,6 +46,7 @@ void animate_redraw(lv_obj_t *object, int frames_per_second) {
     lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
     lv_anim_start(&anim);
 }
+constexpr int fold_size = 11;
 lv_obj_t *folded_sheet(lv_obj_t *parent, int x, int y, int width, int height) {
     auto *sheet = shape(parent, x, y, width, height, 0, face);
     // The fold sits outside the text column and remains still while reading.
@@ -56,12 +57,12 @@ lv_obj_t *folded_sheet(lv_obj_t *parent, int x, int y, int width, int height) {
             lv_obj_get_coords(lv_event_get_target_obj(e), &a);
             lv_draw_triangle_dsc_t d;
             lv_draw_triangle_dsc_init(&d);
-            d.p[0] = {lv_value_precise_t(a.x2 - 11), lv_value_precise_t(a.y1)};
+            d.p[0] = {lv_value_precise_t(a.x2 - fold_size), lv_value_precise_t(a.y1)};
             d.p[1] = {lv_value_precise_t(a.x2), lv_value_precise_t(a.y1)};
-            d.p[2] = {lv_value_precise_t(a.x2), lv_value_precise_t(a.y1 + 11)};
+            d.p[2] = {lv_value_precise_t(a.x2), lv_value_precise_t(a.y1 + fold_size)};
             d.color = lv_color_hex(paper);
             lv_draw_triangle(lv_event_get_layer(e), &d);
-            d.p[1] = {lv_value_precise_t(a.x2 - 11), lv_value_precise_t(a.y1 + 11)};
+            d.p[1] = {lv_value_precise_t(a.x2 - fold_size), lv_value_precise_t(a.y1 + fold_size)};
             d.color = lv_color_hex(0xbfc8b3);
             lv_draw_triangle(lv_event_get_layer(e), &d);
         },
@@ -586,19 +587,26 @@ void UI::render_reader() {
                                          : OrbitScene::ready);
         return;
     }
-    constexpr int sheet_x = 9, sheet_width = 272;
+    constexpr int sheet_x = 9, sheet_y = 7, sheet_width = 272, sheet_height = 111;
+    constexpr int shadow_offset = 3;
     constexpr int sheet_right = sheet_x + sheet_width;
     constexpr int text_width = sheet_width - 22;
     constexpr int rail_x = 293;
-    shape(body_, sheet_x + 3, 10, sheet_width, 111, 0, accent);
-    auto *sheet = folded_sheet(body_, sheet_x, 7, sheet_width, 111);
+    auto *page_layer = lv_obj_create(body_);
+    lv_obj_remove_style_all(page_layer);
+    lv_obj_remove_flag(page_layer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_pos(page_layer, sheet_x, sheet_y);
+    lv_obj_set_size(page_layer, sheet_width + shadow_offset, sheet_height + shadow_offset);
+    shape(page_layer, shadow_offset, fold_size, sheet_width,
+          sheet_height + shadow_offset - fold_size, 0, accent);
+    auto *sheet = folded_sheet(page_layer, 0, 0, sheet_width, sheet_height);
     if (turn_direction_) {
         lv_anim_t turn;
         lv_anim_init(&turn);
-        lv_anim_set_var(&turn, sheet);
+        lv_anim_set_var(&turn, page_layer);
         lv_anim_set_exec_cb(
             &turn, [](void *obj, int32_t y) { lv_obj_set_y(static_cast<lv_obj_t *>(obj), y); });
-        lv_anim_set_values(&turn, 7 + turn_direction_ * 5, 7);
+        lv_anim_set_values(&turn, sheet_y + turn_direction_ * 5, sheet_y);
         lv_anim_set_duration(&turn, 180);
         lv_anim_set_path_cb(&turn, lv_anim_path_ease_out);
         lv_anim_start(&turn);
