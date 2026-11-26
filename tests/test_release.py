@@ -40,9 +40,9 @@ class ReleaseVersionTest(unittest.TestCase):
 
     def test_package_metadata_must_match_generated_version(self):
         with tempfile.TemporaryDirectory() as directory:
-            package = Path(directory) / "okou-zero_0.2.6_arm64.deb"
+            package = Path(directory) / "okou_0.2.6_arm64.deb"
             package.touch()
-            fields = {"Package": "okou-zero", "Version": "0.2.5", "Architecture": "arm64"}
+            fields = {"Package": "okou", "Version": "0.2.5", "Architecture": "arm64"}
             with patch.object(release, "package_field", side_effect=lambda _, key: fields[key]):
                 with self.assertRaisesRegex(ValueError, "Package Version"):
                     release.validate_package("v0.2.6", package)

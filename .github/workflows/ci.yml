@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   native:
-    name: Native ${{ matrix.arch }} protocols, UI and package
+    name: Native ${{ matrix.arch }} build and tests
     runs-on: ${{ matrix.runner }}
     # Configuration source only; this is the single standard package, not a staging variant.
     environment: staging
@@ -49,6 +49,7 @@ jobs:
         env:
           PUBLIC_CLIENT_ID: ${{ vars.OKOU_ZERO_OAUTH_CLIENT_ID }}
           BUILD_TYPE: ${{ matrix.build_type }}
+          BUILD_STORE: ${{ matrix.arch == 'arm64' && 'ON' || 'OFF' }}
           BUILD_DESKTOP: ${{ matrix.desktop }}
           TRUSTED_PUBLISH: ${{ github.event_name == 'push' && github.repository == 'e7h4n/okou-zero' && github.ref == 'refs/heads/main' }}
         shell: bash
@@ -65,7 +66,7 @@ jobs:
             release_version=(-DOKOU_ZERO_BUILD_VERSION="$version")
           fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID" \
+            -DOKOU_ZERO_STORE="$BUILD_STORE" -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID" \
             "${release_version[@]}"
       - name: Read configured CMake version
         id: version
@@ -79,7 +80,8 @@ jobs:
       # Updater tests mock all release/network operations. Never check/apply a real update in CI.
       - name: Native protocol, UI and updater tests
         run: ctest --test-dir build --output-on-failure --no-tests=error
-      - name: Build and inspect Debian package
+      - name: Build and inspect store package
+        if: matrix.arch == 'arm64'
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
         working-directory: build
@@ -87,15 +89,17 @@ jobs:
         run: |
           cpack -G DEB
           shopt -s nullglob
-          packages=(okou-zero_*.deb)
+          packages=(*.deb)
           test "${#packages[@]}" -eq 1
+          test "${packages[0]}" = "okou_${{ steps.version.outputs.version }}_arm64.deb"
           test "$(dpkg-deb -f "${packages[0]}" Architecture)" = "$EXPECTED_ARCH"
           dpkg-deb --info "${packages[0]}"
           dpkg-deb --contents "${packages[0]}"
           sha256sum "${packages[0]}" > SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Installation, packaged native UI and removal smoke test
-        run: bash scripts/ci-package-smoke.sh ./build/okou-zero_*.deb build
+        if: matrix.arch == 'arm64'
+        run: bash scripts/ci-package-smoke.sh ./build/okou_*_arm64.deb build
       - name: Save test evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -105,20 +109,20 @@ jobs:
             build/ui-*.bmp
             build/ui-*.ppm
             build/Testing/Temporary/LastTest.log
+            build/installed-*.ppm
           retention-days: 14
-      - name: Publish package artifact
+      - name: Upload tested store package
+        if: matrix.arch == 'arm64'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: okou-zero-${{ steps.version.outputs.version }}-${{ matrix.arch }}
+          name: okou-${{ steps.version.outputs.version }}-arm64
           path: |
-            build/okou-zero_*.deb
+            build/okou_*_arm64.deb
             build/SHA256SUMS
-            build/installed-headless.ppm
-            build/installed-update.ppm
           if-no-files-found: error
           retention-days: 30
   release:
-    name: Publish signed stable arm64 update
+    name: Publish signed arm64 store package
     if: github.event_name == 'push' && github.repository == 'e7h4n/okou-zero' && github.ref == 'refs/heads/main'
     # The entire dual-native matrix must pass, including installation and UI smoke tests.
     needs: native
@@ -136,7 +140,7 @@ jobs:
       - name: Download this run's tested arm64 package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: okou-zero-${{ needs.native.outputs.version }}-arm64
+          name: okou-${{ needs.native.outputs.version }}-arm64
           path: release-input
       - name: Install signing dependencies
         run: |
