@@ -26,19 +26,20 @@ ctest --test-dir build --output-on-failure
 ```
 
 The amd64 CI job builds the simulator. The native arm64 job builds the device
-backend. Both run protocol, UI and package installation tests. Each job attaches
-its Debian package and SHA-256 checksum to the run.
+backend. Both run protocol and UI tests. Only arm64 builds a Debian package. CI
+installs, exercises and removes the store package before publishing it.
 
 ## Install and sign in
 
-Download the arm64 package, `manifest.json`, `manifest.sig` and `SHA256SUMS` from
-the same [official release](https://github.com/e7h4n/okou-zero/releases) into an
-empty directory. For a CI build, extract the package and checksum from the arm64
-artifact. Run these commands from that directory on the device.
+Install **Okou** from the Cardputer Zero AppStore once the listing is approved.
+To install a build directly, download `okou_VERSION_arm64.deb`, `manifest.json`,
+`manifest.sig` and `SHA256SUMS` from the same versioned
+[GitHub release](https://github.com/e7h4n/okou-zero/releases) into an empty
+directory. Run these commands on the device:
 
 ```sh
 sha256sum -c SHA256SUMS
-sudo apt-get install ./okou-zero_*_arm64.deb
+sudo apt-get install ./okou_*_arm64.deb
 ```
 
 Open **Okou** from APPLaunch so the launcher hands over the framebuffer and keyboard.
@@ -46,9 +47,9 @@ Press Enter to sign in and select the workspace on Clerk's device approval page.
 Official packages bundle the public OAuth client ID. Local builds can set it
 on the setup screen. See [authentication and configuration](docs/auth-setup.md).
 
-At launch, Okou checks for a newer signed release. Press **Ctrl+Alt+U** to install
-an offered update. The root helper rechecks the signature, package identity,
-version and contents before installing. See [signed updates and recovery](docs/updates.md).
+The store manages updates. The Debian package replaces an existing standalone
+`okou-zero` installation and uses the same account and conversation directories.
+See [release and update details](docs/updates.md).
 
 ## Keyboard
 
@@ -66,7 +67,6 @@ version and contents before installing. See [signed updates and recovery](docs/u
 | Esc | Back/menu |
 | Ctrl+W | Workspace/sign-out menu |
 | Ctrl+L | Refresh authoritative state |
-| Ctrl+Alt+U | Explicitly confirm an offered signed update |
 | Ctrl+Q | Exit to launcher |
 
 On the handheld, Okou uses the launcher's **Screen → DarkTime** setting when it opens

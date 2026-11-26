@@ -1,6 +1,22 @@
-# Signed updates
+# Store releases and updates
 
-## User flow
+Both native CI jobs run the test suite. The arm64 job creates one store package,
+`okou_VERSION_arm64.deb`, and smoke-tests the installed executable and Launcher
+entry. A trusted main build increments the patch from the previous first-parent
+release tag, verifies the package checksum and Debian metadata, and publishes
+that tested artifact with a signed manifest and `SHA256SUMS`. Pull requests
+build and test the package without publishing a release. The store submission
+uses this same Debian file.
+
+Store releases use versioned GitHub release URLs. The GitHub Latest pointer
+stays on the last standalone release for existing clients. Installing the
+store package switches the device to AppStore-managed updates.
+
+## Legacy standalone updates
+
+The following applies to the standalone `okou-zero` package through 0.2.33.
+
+### User flow
 
 - Open the device app: an isolated Python child checks the latest stable release of `e7h4n/okou-zero` over HTTPS. It does not block LVGL or require GitHub/Okou credentials.
 - Newer releases are automatically downloaded to a user-only cache, verified, and atomically marked ready. Existing verified identical bundles are reused.
@@ -8,9 +24,9 @@
 - During installation the UI remains visible, Escape is disabled and the process waits for its installer. After successful installation, Okou `exec`s the installed executable, preserving the launcher's child ownership. On failure it shows an update error and remains usable; it does not automatically replay installation. Okou defers installation during voice capture, upload, retained audio, an uncertain send, client ID entry or another busy action.
 - Network errors, absent Releases, GitHub rate limits, missing privileges, invalid signatures, stale releases or a busy package manager never cause a forced upgrade.
 
-## Trust and privilege boundary
+### Trust and privilege boundary
 
-The current package embeds the RSA public key `assets/update-public.pem` at `/usr/share/okou-zero/update-public.pem`. The signing private key is stored as the GitHub Actions repository secret `OKOU_UPDATE_SIGNING_KEY`, never in source, artifacts, packages or on the device. The repository's maintainers and signing workflow are trusted code publishers. Compromise of the signing authority can authorize malicious maintainer scripts as root; this is not a sandbox for publisher code.
+The standalone package embeds the RSA public key `assets/update-public.pem` at `/usr/share/okou-zero/update-public.pem`. The signing private key is stored as the GitHub Actions repository secret `OKOU_UPDATE_SIGNING_KEY`, never in source, artifacts, packages or on the device. The repository's maintainers and signing workflow are trusted code publishers. Compromise of the signing authority can authorize malicious maintainer scripts as root; this is not a sandbox for publisher code.
 
 Release assets:
 
@@ -33,16 +49,7 @@ When upgrading an existing installation, install the PulseAudio PCM plugin once 
 
 The root helper takes an exclusive update lock, copies bounded stdin into a fresh root-only directory, independently verifies the signature, full payload SHA-256 and length, exact Debian Package/Version/Architecture, and that the installed package is fully configured and older. Only then does it run fixed `/usr/bin/dpkg --install` on the root-owned verified copy. It does not trust filenames or paths supplied by the user or manifest. It does not download arbitrary dependencies, retry a locked/failed package manager, or run user-supplied commands.
 
-## Release procedure
-
-1. A push to the trusted repository's `main` starts the release build. It increments the patch version from the previous stable tag on main's first-parent history and passes that version to CMake. Unversioned development builds report `0.0.0`.
-2. Both native CI jobs must pass protocol, UI, and package-install tests. A newer queued main push can supersede a pending build.
-3. The publisher verifies the artifact checksum and Debian metadata, then signs and verifies the manifest against the committed public key. It creates the matching tag at the tested commit and publishes the GitHub Release. It never overwrites an existing release.
-4. Devices offer the published newer release on their next app open.
-
-`python3 scripts/release.py --prepare-only ...` prepares assets without publishing. PR and feature-branch CI do not sign or publish updates.
-
-## Recovery
+### Recovery
 
 - No automatic rollback of Debian maintainer-script side effects. Keep power connected. An interrupted/failed `dpkg` may require an administrator to inspect and repair package-manager state. No failure is represented as confirmed success, and no uncertain install is automatically replayed.
 - A failed relaunch returns to the launcher; reopen Okou manually. A failed check is retried only on a future app launch.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a signed arm64 update and create (never overwrite) a stable release.
+"""Prepare a signed arm64 store package and create (never overwrite) a stable release.
 
 Only trusted main CI should supply OKOU_UPDATE_SIGNING_KEY. No publication is
 attempted until all local package, commit, and signature checks have passed.
@@ -26,7 +26,8 @@ def run(command, **kwargs):
     # Do not pass the signing secret to openssl, dpkg, or gh environments.
     env = os.environ.copy()
     env.pop("OKOU_UPDATE_SIGNING_KEY", None)
-    return subprocess.run(command, check=True, env=env, **kwargs)
+    kwargs.setdefault("check", True)
+    return subprocess.run(command, env=env, **kwargs)
 
 
 def package_field(package, field):
@@ -65,7 +66,7 @@ def release_exists(tag):
     release = json.loads(result.stdout)
     expected = {
         "manifest.json", "manifest.sig", "SHA256SUMS",
-        f"okou-zero_{tag[1:]}_arm64.deb",
+        f"okou_{tag[1:]}_arm64.deb",
     }
     if (release["isDraft"] or release["isPrerelease"] or
             not expected <= {asset["name"] for asset in release["assets"]}):
@@ -80,11 +81,11 @@ def validate_package(tag, package):
     if not package.is_file() or package.is_symlink():
         raise ValueError("Expected a regular Debian package")
     for field, expected in (
-        ("Package", "okou-zero"), ("Version", version), ("Architecture", "arm64")
+        ("Package", "okou"), ("Version", version), ("Architecture", "arm64")
     ):
         if package_field(package, field) != expected:
             raise ValueError(f"Package {field} does not match release requirements")
-    filename = f"okou-zero_{version}_arm64.deb"
+    filename = f"okou_{version}_arm64.deb"
     if package.name != filename:
         raise ValueError("Package filename does not match its verified metadata")
     return version, filename
@@ -95,7 +96,7 @@ def manifest_bytes(version, filename, package):
         "schema": 1,
         "version": version,
         "architecture": "arm64",
-        "package": "okou-zero",
+        "package": "okou",
         "filename": filename,
         "sha256": hashlib.sha256(package.read_bytes()).hexdigest(),
         "size": package.stat().st_size,
@@ -197,12 +198,11 @@ def main(argv=None):
                 ], stdout=subprocess.DEVNULL)
             run([
                 "gh", "release", "create", args.tag, "--repo", REPOSITORY,
-                "--verify-tag", "--latest", "--title", f"Okou {version}",
+                "--verify-tag", "--latest=false", "--title", f"Okou {version}",
                 "--notes", (
-                    f"Okou {version} for Cardputer Zero (arm64).\n\n"
-                    "Includes the Debian package, signed update manifest, and SHA-256 "
-                    "checksums. The updater verifies manifest.sig against its bundled "
-                    "public key before installation."
+                    f"Okou {version} for the Cardputer Zero AppStore (arm64).\n\n"
+                    "Install the okou package through the AppStore or with apt. "
+                    "The signed manifest and SHA-256 checksums identify this build."
                 ),
                 *map(str, assets),
             ])
