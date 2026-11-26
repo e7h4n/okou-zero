@@ -8,6 +8,7 @@
 #include <ctime>
 
 namespace okou {
+class PocketOrbit;
 enum class Page { login, setup, chat, settings };
 enum class Action {
     none,
@@ -30,6 +31,7 @@ class UI {
     std::vector<std::string> visible_voice_clips;
     BatteryStatus battery;
     RecordingWaveform recording_waveform;
+    PlaybackMeter playback;
     bool busy = false, recording = false, uncertain = false;
     bool submitting = false, voice_pending = false, voice_working = false;
     std::chrono::steady_clock::time_point recording_started{};
@@ -48,7 +50,7 @@ class UI {
     void update_history(std::vector<Message> history);
     void update_recording_clock();
     void update_clock();
-    void update_playback_clock(unsigned seconds);
+    void update_playback_clock();
     bool take_local_reply();
     std::chrono::steady_clock::time_point volume_deadline() const {
         return volume_overlay_ ? volume_until_ : std::chrono::steady_clock::time_point::max();
@@ -64,6 +66,9 @@ class UI {
     std::chrono::steady_clock::time_point volume_until_;
     lv_font_t *font_ = nullptr;
     lv_font_t *detail_font_ = nullptr;
+    lv_font_t *pixel_font_ = nullptr, *greeting_font_ = nullptr, *display_font_ = nullptr;
+    std::vector<lv_font_t *> loaded_fonts_;
+    std::unique_ptr<PocketOrbit> orbit_;
     MarkdownFonts markdown_fonts_;
     std::string pending_reply_to_;
     ChatNavigation navigation_;
@@ -71,7 +76,7 @@ class UI {
     lv_obj_t *recording_overlay_ = nullptr;
     lv_obj_t *recording_clock_ = nullptr;
     lv_obj_t *playback_clock_ = nullptr;
-    long playback_seconds_ = -1;
+    long playback_seconds_ = -1, playback_duration_ = -1;
     long recording_seconds_ = -1;
     lv_obj_t *clock_ = nullptr;
     std::time_t clock_minute_ = -1;
@@ -79,8 +84,10 @@ class UI {
     int reading_line_ = 22;
     void render_voice_panel(bool capturing);
     void render_reader();
-    lv_obj_t *voice_state_label(lv_obj_t *parent, const char *text, int y, std::uint32_t color);
-    void render_sending(const char *state);
+    void render_sending(bool accepted);
+    void footer_hint(const std::string &action, const std::string &secondary = {});
+    lv_obj_t *type(lv_obj_t *parent, const std::string &text, int x, int y, int width,
+                   std::uint32_t color, const lv_font_t *font, int height = 0);
     void render_header();
     lv_obj_t *label(lv_obj_t *parent, const std::string &text, int x, int y, int width,
                     std::uint32_t color, int height = 0);
