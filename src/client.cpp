@@ -122,52 +122,15 @@ Json visible_row(const Json &row) {
     for (const char *k : {"id", "chatThreadId", "seqId", "eventType", "runId", "revokesEventId"})
         if (row.contains(k))
             safe[k] = row[k];
-    auto p = row.value("payload", Json::object());
-    if (!p.is_object())
-        return safe;
-    auto type = str(row, "eventType");
-    Json payload = Json::object();
-    if (type == "output.message") {
-        payload["content"] = assistant_text(str(p, "content"));
+    if (str(row, "eventType") == "output.message") {
+        auto p = row.find("payload");
+        if (p != row.end() && p->is_object())
+            safe["payload"] = {{"content", assistant_text(str(*p, "content"))}};
         const auto stamp = row.find("createdAt");
         if (stamp != row.end() && stamp->is_string() &&
             stamp->get_ref<const std::string &>().size() <= 40)
             safe["createdAt"] = *stamp;
     }
-    if (type.rfind("input.", 0) == 0 && p.contains("userMessage") && p["userMessage"].is_object()) {
-        auto doc = p["userMessage"];
-        Json parts = Json::array();
-        std::size_t bytes = 0;
-        if (doc.contains("parts") && doc["parts"].is_array())
-            for (const auto &part : doc["parts"]) {
-                if (parts.size() >= 128 || bytes >= 32768)
-                    break;
-                const auto kind = str(part, "type");
-                if (kind == "source" || kind == "additional_info" || kind == "automation" ||
-                    kind == "model")
-                    continue;
-                if (kind == "text") {
-                    auto text = clipped(str(part, "text"), 32768 - bytes);
-                    bytes += text.size();
-                    parts.push_back({{"type", "text"}, {"text", text}});
-                } else if (kind == "voice") {
-                    Json clips = Json::array();
-                    if (part.contains("clips") && part["clips"].is_array())
-                        for (const auto &clip : part["clips"]) {
-                            if (clips.size() == 32)
-                                break;
-                            auto file_id = str(clip, "fileId");
-                            if (is_uuid(file_id))
-                                clips.push_back(file_id);
-                        }
-                    parts.push_back({{"type", "voice"}, {"clips", std::move(clips)}});
-                } else {
-                    parts.push_back({{"type", "unsupported"}});
-                }
-            }
-        payload["userMessage"] = {{"parts", parts}};
-    }
-    safe["payload"] = std::move(payload);
     return safe;
 }
 void validate_thread(const std::string &id) {
