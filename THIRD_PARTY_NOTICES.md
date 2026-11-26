@@ -96,8 +96,10 @@ The existing approved source asset `assets/okou-avatar-source.png` is the offici
 Okou ready-state avatar. Source: `ios/Widgets/Assets.xcassets/Avatar-ready.imageset/Avatar-ready@3x.png`
 in https://github.com/okou-ai/okou at commit `72ef73aec992722ecd4b4173a02113a3e4f48327`.
 Original SHA-256: `abe5cab23c7d4d7a5cbbc6a27643161fb3ef6b27cafab82f3b81f1cadf71062d`.
-The 100px launcher and 96px desktop icons are proportional resizes only, without
-redrawing, recoloring or cropping. This artwork is excluded from the repository's
+The launcher and desktop icons use the orange logomark from `ios/Assets/AppIcon.svg`
+with the dark background from `OkouColor.generated.swift` in the same upstream
+repository at commit `a0affd52f4f350d51d857d46772a01ff058ec439`.
+These brand assets are excluded from the repository's
 MIT code license; no general license or trademark rights to reuse Okou brand
 assets are granted. No BSL application implementation is copied.
 
