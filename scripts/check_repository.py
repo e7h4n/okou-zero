@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Small, deterministic source-policy check; not a replacement for secret scanning."""
+import json
 import pathlib
 import re
 import subprocess
+
+SEMVER = r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
 
 root = pathlib.Path(__file__).resolve().parents[1]
 files = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).split(b"\0")
@@ -28,6 +31,26 @@ for raw in files:
         errors.append(f"{relative}: potential production credential")
     if relative.startswith(".github/workflows/") and "pull_request_target" in text:
         errors.append(f"{relative}: privileged fork execution is prohibited")
+
+manifest_file = root / ".release-please-manifest.json"
+cmake_file = root / "CMakeLists.txt"
+if manifest_file.is_file() and cmake_file.is_file():
+    manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    manifest_ver = manifest_data.get(".")
+    cmake_match = re.search(
+        r'set\(OKOU_ZERO_BUILD_VERSION\s+"([^"]+)"\s+CACHE\s+STRING\b',
+        cmake_file.read_text(encoding="utf-8"),
+    )
+    cmake_ver = cmake_match.group(1) if cmake_match else None
+    if not isinstance(manifest_ver, str) or re.fullmatch(SEMVER, manifest_ver) is None:
+        errors.append(".release-please-manifest.json: root version must be stable SemVer")
+    if not isinstance(cmake_ver, str) or re.fullmatch(SEMVER, cmake_ver) is None:
+        errors.append("CMakeLists.txt: OKOU_ZERO_BUILD_VERSION must be stable SemVer")
+    elif isinstance(manifest_ver, str) and cmake_ver != manifest_ver:
+        errors.append(
+            f"Version mismatch: CMakeLists.txt ({cmake_ver}) != .release-please-manifest.json ({manifest_ver})"
+        )
+
 if errors:
     raise SystemExit("\n".join(errors))
 print("Repository hygiene checks passed (not a comprehensive secret audit)")

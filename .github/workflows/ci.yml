@@ -60,14 +60,8 @@ jobs:
             echo 'Missing public OKOU_ZERO_OAUTH_CLIENT_ID Variable' >&2
             exit 1
           fi
-          release_version=()
-          if [[ "$TRUSTED_PUBLISH" == true ]]; then
-            version=$(python3 scripts/release.py --next-version)
-            release_version=(-DOKOU_ZERO_BUILD_VERSION="$version")
-          fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DOKOU_ZERO_STORE="$BUILD_STORE" -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID" \
-            "${release_version[@]}"
+            -DOKOU_ZERO_STORE="$BUILD_STORE" -DOKOU_ZERO_DESKTOP="$BUILD_DESKTOP" -DOKOU_ZERO_OAUTH_CLIENT_ID="$PUBLIC_CLIENT_ID"
       - name: Read configured CMake version
         id: version
         shell: bash
@@ -121,11 +115,39 @@ jobs:
             build/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
+  release-please:
+    name: Manage release PR and draft release
+    if: github.event_name == 'push' && github.repository == 'e7h4n/okou-zero' && github.ref == 'refs/heads/main'
+    # Only promote verified main commits into a release PR or draft release.
+    needs: native
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      id: ${{ steps.release.outputs.id }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
   release:
     name: Publish signed arm64 store package
-    if: github.event_name == 'push' && github.repository == 'e7h4n/okou-zero' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'e7h4n/okou-zero' &&
+      github.ref == 'refs/heads/main' &&
+      needs.release-please.outputs.release_created == 'true'
     # The entire dual-native matrix must pass, including installation and UI smoke tests.
-    needs: native
+    needs: [native, release-please]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -146,17 +168,94 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y python3 openssl dpkg-dev
-      - name: Validate, sign, verify and publish stable release
+      - name: Validate, sign, verify and publish latest release
         env:
           GH_TOKEN: ${{ github.token }}
           OKOU_UPDATE_SIGNING_KEY: ${{ secrets.OKOU_UPDATE_SIGNING_KEY }}
-          RELEASE_VERSION: ${{ needs.native.outputs.version }}
+          BUILT_VERSION: ${{ needs.native.outputs.version }}
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_ID: ${{ needs.release-please.outputs.id }}
+          RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
           RELEASE_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          test "$BUILT_VERSION" = "$RELEASE_VERSION"
+          test "$RELEASE_SHA" = "$RELEASE_COMMIT"
+          shopt -s nullglob
+          packages=(release-input/*.deb)
+          test "${#packages[@]}" -eq 1
+          (cd release-input && sha256sum --check SHA256SUMS)
+          python3 scripts/release.py \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_COMMIT" \
+            --release-id "$RELEASE_ID" \
+            --package "${packages[0]}" \
+            --output-dir release-assets
+  publish-store:
+    name: Submit CardputerZero store PR
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'e7h4n/okou-zero' &&
+      github.ref == 'refs/heads/main' &&
+      needs.release-please.outputs.release_created == 'true'
+    needs: [native, release-please, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check store publishing token
+        id: token
+        env:
+          CARDPUTER_PACKAGES_TOKEN: ${{ secrets.CARDPUTER_PACKAGES_TOKEN }}
+        shell: bash
+        run: |
+          if [[ -z "$CARDPUTER_PACKAGES_TOKEN" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping CardputerZero/packages PR because CARDPUTER_PACKAGES_TOKEN secret is not configured."
+            if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+              {
+                echo "### CardputerZero Store PR Skipped"
+                echo ""
+                echo "Configure the \`CARDPUTER_PACKAGES_TOKEN\` repository secret (\`@e7h4n\` Classic PAT with \`public_repo\` scope) to enable automatic store update PRs."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check out tested main commit
+        if: steps.token.outputs.enabled == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Download this run's tested arm64 package
+        if: steps.token.outputs.enabled == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: okou-${{ needs.native.outputs.version }}-arm64
+          path: release-input
+      - name: Install store publishing dependencies
+        if: steps.token.outputs.enabled == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3 dpkg-dev
+      - name: Open CardputerZero/packages update PR
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          CARDPUTER_PACKAGES_TOKEN: ${{ secrets.CARDPUTER_PACKAGES_TOKEN }}
+          RELEASE_GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_ID: ${{ needs.release-please.outputs.id }}
         shell: bash
         run: |
           shopt -s nullglob
           packages=(release-input/*.deb)
           test "${#packages[@]}" -eq 1
           (cd release-input && sha256sum --check SHA256SUMS)
-          python3 scripts/release.py --tag "v$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
-            --package "${packages[0]}" --output-dir release-assets
+          python3 scripts/publish_store.py \
+            --tag "$RELEASE_TAG" \
+            --release-id "$RELEASE_ID" \
+            --package "${packages[0]}"
