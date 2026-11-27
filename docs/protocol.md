@@ -45,7 +45,8 @@ rows with the matching run ID.
 
 Tap Enter to capture 16 kHz mono PCM16 through the configured ALSA device
 (default `pulse`) for up to ten minutes. Tap Enter again to send, or press Esc to
-discard. The waveform uses the captured sample peaks.
+discard. Recordings shorter than one second are skipped without uploading. The
+waveform uses the captured sample peaks.
 
 1. Call `prepare_voice_upload` with the WAV filename and byte count.
 2. PUT the audio to the signed URL with its upload headers and call `complete_voice_upload`.

@@ -416,15 +416,32 @@ class Engine {
                     voice_pcm_ = audio_->finish();
                     audio_.reset();
                 }
-                if (voice_pcm_.empty() && voice_file_id_.empty()) {
-                    emit([](UI &ui) {
-                        ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
-                        ui.status = "No audio recorded";
-                    });
+                if (voice_cancelled_ || stopping_) {
+                    voice_pcm_ = std::vector<std::int16_t>();
                     return;
                 }
-                if (voice_cancelled_ || stopping_)
-                    return;
+                if (voice_file_id_.empty()) {
+                    if (voice_pcm_.empty()) {
+                        voice_pcm_ = std::vector<std::int16_t>();
+                        voice_thread_.clear();
+                        emit([](UI &ui) {
+                            ui.recording = ui.voice_pending = ui.voice_working = ui.submitting =
+                                ui.busy = false;
+                            ui.status = "No audio recorded";
+                        });
+                        return;
+                    }
+                    if (voice_recording_too_short(voice_pcm_.size())) {
+                        voice_pcm_ = std::vector<std::int16_t>();
+                        voice_thread_.clear();
+                        emit([](UI &ui) {
+                            ui.recording = ui.voice_pending = ui.voice_working = ui.submitting =
+                                ui.busy = false;
+                            ui.status = "Recording too short";
+                        });
+                        return;
+                    }
+                }
                 emit([](UI &ui) {
                     ui.recording = ui.voice_pending = ui.voice_working = false;
                     ui.submitting = ui.busy = true;
@@ -470,9 +487,9 @@ class Engine {
             }
         });
     }
-    void cancel_voice() {
+    void cancel_voice(std::string status = "Recording discarded") {
         voice_cancelled_ = true;
-        enqueue([this] {
+        enqueue([this, status = std::move(status)]() mutable {
             if (audio_) {
                 audio_->cancel();
                 audio_.reset();
@@ -480,10 +497,10 @@ class Engine {
             voice_pcm_ = std::vector<std::int16_t>();
             voice_file_id_.clear();
             voice_thread_.clear();
-            emit([](UI &ui) {
+            emit([status = std::move(status)](UI &ui) {
                 ui.recording = ui.voice_pending = ui.voice_working = ui.busy = false;
                 ui.submitting = false;
-                ui.status = "Recording discarded";
+                ui.status = status;
             });
         });
     }
@@ -609,7 +626,23 @@ int main(int argc, char **argv) {
             check(!ui.uncertain);
             ui.demo("sent");
             check(ui.handle({Key::enter, {}}) == Action::start_recording && ui.recording);
-            check(ui.handle({Key::enter, {}}) == Action::voice && !ui.recording);
+            check(ui.handle({Key::enter, {}}) == Action::skip_short_recording && !ui.recording &&
+                  !ui.voice_pending && !ui.submitting && ui.status == "Recording too short");
+            ui.voice_working = ui.busy = false;
+            check(ui.handle({Key::enter, {}}) == Action::start_recording && ui.recording);
+            ui.recording_started =
+                std::chrono::steady_clock::now() - std::chrono::milliseconds(500);
+            ui.voice_working = ui.busy = false;
+            check(ui.recording_too_short(ui.recording_started + std::chrono::milliseconds(999)));
+            check(!ui.recording_too_short(ui.recording_started + std::chrono::seconds(1)));
+            check(ui.handle({Key::enter, {}}) == Action::skip_short_recording && !ui.recording &&
+                  !ui.voice_pending && !ui.submitting && ui.status == "Recording too short");
+            ui.voice_working = ui.busy = false;
+            check(ui.handle({Key::enter, {}}) == Action::start_recording && ui.recording);
+            ui.recording_started = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+            ui.voice_working = ui.busy = false;
+            check(ui.handle({Key::enter, {}}) == Action::voice && !ui.recording &&
+                  ui.voice_pending);
             check(ui.handle({Key::enter, {}}) == Action::none);
             ui.demo("history");
             check(ui.handle({Key::enter, {}}) == Action::start_recording);
@@ -778,6 +811,9 @@ int main(int argc, char **argv) {
                     break;
                 case Action::discard_recording:
                     engine->cancel_voice();
+                    break;
+                case Action::skip_short_recording:
+                    engine->cancel_voice("Recording too short");
                     break;
                 case Action::voice:
                     engine->voice(true, ui.thread_id);

@@ -18,6 +18,7 @@ enum class Action {
     voice,
     start_recording,
     discard_recording,
+    skip_short_recording,
     switch_workspace,
     logout,
     quit
@@ -42,6 +43,8 @@ class UI {
     void show_volume(VolumeStatus volume);
     void dismiss_expired_volume();
     bool update_safe() const;
+    bool recording_too_short(
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) const;
     void demo(const std::string &screen);
     void open_thread(const std::string &id);
     void reset_account();

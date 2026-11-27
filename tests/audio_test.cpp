@@ -80,6 +80,17 @@ int main() {
           "Ten-minute overview retains the beginning, silence and partial final bin");
     wave.clear();
     check(wave.overview().samples == 0, "New recordings reset the full waveform");
+    check(okou::voice_sample_rate == 16000U, "Voice sample rate is 16 kHz");
+    check(okou::min_voice_duration == std::chrono::seconds(1), "Minimum recording duration is 1s");
+    check(okou::min_voice_samples == 16000U, "Minimum recording length is 16,000 samples");
+    check(okou::voice_recording_too_short(0), "Empty recording is too short");
+    check(okou::voice_recording_too_short(1), "Single-sample recording is too short");
+    check(okou::voice_recording_too_short(okou::min_voice_samples - 1),
+          "Recording under 1s is too short");
+    check(!okou::voice_recording_too_short(okou::min_voice_samples),
+          "Recording of exactly 1s is accepted");
+    check(!okou::voice_recording_too_short(okou::min_voice_samples + 1),
+          "Recording over 1s is accepted");
     // No start() call: these lifecycle checks must never open a capture device.
     okou::AudioCapture audio("not-opened-by-tests");
     check(audio.finish().empty(), "Finish before start is empty");
