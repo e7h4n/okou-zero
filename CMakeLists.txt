@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-set(OKOU_ZERO_BUILD_VERSION "0.2.34" CACHE STRING "Package and application version") # x-release-please-version
+set(OKOU_ZERO_BUILD_VERSION "0.3.0" CACHE STRING "Package and application version") # x-release-please-version
 if(NOT OKOU_ZERO_BUILD_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
   message(FATAL_ERROR "Invalid Okou Zero version")
 endif()
