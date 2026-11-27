@@ -2,15 +2,20 @@
 
 Both native CI jobs run the test suite. The arm64 job creates one store package,
 `okou_VERSION_arm64.deb`, and smoke-tests the installed executable and Launcher
-entry. A trusted main build increments the patch from the previous first-parent
-release tag, verifies the package checksum and Debian metadata, and publishes
-that tested artifact with a signed manifest and `SHA256SUMS`. Pull requests
-build and test the package without publishing a release. The store submission
-uses this same Debian file.
+entry. Pull requests build and test the package without publishing a release.
 
-Store releases use versioned GitHub release URLs. The GitHub Latest pointer
-stays on the last standalone release for existing clients. Installing the
-store package switches the device to AppStore-managed updates.
+Versions and `CHANGELOG.md` are managed by `release-please` from linear Squash
+commits on `main` (`.release-please-manifest.json` and `CMakeLists.txt`). Merging
+the generated Release PR runs the full native build and smoke tests on `main`,
+creates a draft GitHub Release, validates and signs the tested `.deb` with
+`manifest.json`, `manifest.sig`, and `SHA256SUMS`, uploads all four assets, and
+publishes the release as the GitHub `Latest` release.
+
+When the `CARDPUTER_PACKAGES_TOKEN` repository secret (`@e7h4n` Classic PAT with
+`public_repo` scope) is configured, the workflow then updates `e7h4n/packages`
+and opens a `CardputerZero/packages` store update PR pointing directly to the
+published GitHub Release `.deb` asset with the release changelog in the PR body.
+Installing the store package switches the device to AppStore-managed updates.
 
 ## Legacy standalone updates
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Prepare a signed arm64 store package and create (never overwrite) a stable release.
+"""Prepare a signed arm64 store package and publish a release-please draft as latest.
 
 Only trusted main CI should supply OKOU_UPDATE_SIGNING_KEY. No publication is
-attempted until all local package, commit, and signature checks have passed.
+attempted until all local package, commit, version, and signature checks have passed.
 """
 
 import argparse
@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -41,37 +42,39 @@ def git_output(*args):
     return run(["git", *args], cwd=ROOT, capture_output=True, text=True).stdout.strip()
 
 
-def next_version():
-    tag = git_output(
-        "describe", "--tags", "--first-parent", "--abbrev=0",
-        "--match", "v[0-9]*.[0-9]*.[0-9]*", "HEAD",
-    )
-    parts = re.fullmatch("v" + SEMVER, tag)
-    if parts is None:
-        raise ValueError("The previous release tag is not stable SemVer")
-    major, minor, patch = map(int, parts.groups())
-    if git_output("rev-parse", f"{tag}^{{commit}}") != git_output("rev-parse", "HEAD"):
-        patch += 1
-    return f"{major}.{minor}.{patch}"
+def manifest_version():
+    manifest_path = ROOT / ".release-please-manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError("Missing .release-please-manifest.json")
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    version = data.get(".")
+    if not isinstance(version, str) or re.fullmatch(SEMVER, version) is None:
+        raise ValueError("Root version in .release-please-manifest.json is not stable SemVer")
+    return version
 
 
-def release_exists(tag):
-    result = run(
-        ["gh", "release", "view", tag, "--repo", REPOSITORY,
-         "--json", "isDraft,isPrerelease,assets"],
-        check=False, capture_output=True, text=True,
+def cmake_version():
+    cmake_path = ROOT / "CMakeLists.txt"
+    if not cmake_path.is_file():
+        raise ValueError("Missing CMakeLists.txt")
+    match = re.search(
+        r'set\(OKOU_ZERO_BUILD_VERSION\s+"([^"]+)"\s+CACHE\s+STRING\b',
+        cmake_path.read_text(encoding="utf-8"),
     )
-    if result.returncode:
-        return False
-    release = json.loads(result.stdout)
-    expected = {
-        "manifest.json", "manifest.sig", "SHA256SUMS",
-        f"okou_{tag[1:]}_arm64.deb",
-    }
-    if (release["isDraft"] or release["isPrerelease"] or
-            not expected <= {asset["name"] for asset in release["assets"]}):
-        raise ValueError("An incomplete or non-stable release already exists for this tag")
-    return True
+    if match is None or re.fullmatch(SEMVER, match.group(1)) is None:
+        raise ValueError("CMakeLists.txt version is not stable SemVer")
+    return match.group(1)
+
+
+def validate_repo_version(tag):
+    if re.fullmatch("v" + SEMVER, tag) is None:
+        raise ValueError("Release tag must be vMAJOR.MINOR.PATCH (stable SemVer)")
+    version = tag[1:]
+    if manifest_version() != version:
+        raise ValueError("Release tag does not match .release-please-manifest.json")
+    if cmake_version() != version:
+        raise ValueError("Release tag does not match CMakeLists.txt")
+    return version
 
 
 def validate_package(tag, package):
@@ -89,6 +92,52 @@ def validate_package(tag, package):
     if package.name != filename:
         raise ValueError("Package filename does not match its verified metadata")
     return version, filename
+
+
+def expected_asset_names(version):
+    return {
+        "manifest.json",
+        "manifest.sig",
+        "SHA256SUMS",
+        f"okou_{version}_arm64.deb",
+    }
+
+
+def fetch_release(release_id):
+    if not isinstance(release_id, str) or re.fullmatch(r"[1-9][0-9]*", release_id) is None:
+        raise ValueError("Release ID must be a positive integer")
+    output = run(
+        ["gh", "api", f"repos/{REPOSITORY}/releases/{release_id}"],
+        capture_output=True, text=True,
+    ).stdout
+    return json.loads(output)
+
+
+def validate_upload_url(upload_url, release_id):
+    base = upload_url.split("{", 1)[0]
+    expected = f"https://uploads.github.com/repos/{REPOSITORY}/releases/{release_id}/assets"
+    if base != expected:
+        raise ValueError("Unexpected GitHub release upload URL")
+    return base
+
+
+def inspect_release(release, tag, commit):
+    version = tag[1:]
+    if release.get("tag_name") != tag:
+        raise ValueError("GitHub release tag does not match the requested release")
+    if release.get("target_commitish") != commit:
+        raise ValueError("GitHub release commit does not match the tested main checkout")
+    if release.get("prerelease") is not False:
+        raise ValueError("Refusing to publish a prerelease as a stable release")
+    expected = expected_asset_names(version)
+    existing_names = {asset.get("name") for asset in release.get("assets", [])}
+    if release.get("draft") is False:
+        if expected <= existing_names:
+            return "published"
+        raise ValueError("An incomplete published release already exists for this tag")
+    if release.get("draft") is not True:
+        raise ValueError("Unexpected GitHub release draft state")
+    return "draft"
 
 
 def manifest_bytes(version, filename, package):
@@ -146,11 +195,47 @@ def prepare(tag, package, output_dir, private_key):
     return version, assets + [checksums]
 
 
+def upload_and_publish(release_id, release, assets):
+    upload_base = validate_upload_url(release.get("upload_url", ""), release_id)
+    expected_sizes = {asset.name: asset.stat().st_size for asset in assets}
+    # Clean up any partial uploads on this draft before uploading fresh assets.
+    for existing in release.get("assets", []):
+        if existing.get("name") in expected_sizes:
+            asset_id = existing.get("id")
+            if not isinstance(asset_id, int) or asset_id <= 0:
+                raise ValueError("Invalid existing GitHub release asset ID")
+            run([
+                "gh", "api", "--method", "DELETE",
+                f"repos/{REPOSITORY}/releases/assets/{asset_id}",
+            ], stdout=subprocess.DEVNULL)
+    for asset in assets:
+        upload_url = f"{upload_base}?name={urllib.parse.quote(asset.name, safe='')}"
+        run([
+            "gh", "api", "--method", "POST", upload_url,
+            "-H", "Content-Type: application/octet-stream",
+            "--input", str(asset),
+        ], stdout=subprocess.DEVNULL)
+    refreshed = fetch_release(release_id)
+    uploaded = {
+        asset.get("name"): asset.get("size")
+        for asset in refreshed.get("assets", [])
+    }
+    for name, size in expected_sizes.items():
+        if uploaded.get(name) != size:
+            raise ValueError(f"Uploaded asset verification failed for {name}")
+    run([
+        "gh", "api", "--method", "PATCH",
+        f"repos/{REPOSITORY}/releases/{release_id}",
+        "-F", "draft=false",
+        "-f", "make_latest=true",
+    ], stdout=subprocess.DEVNULL)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--next-version", action="store_true")
     parser.add_argument("--tag")
     parser.add_argument("--commit")
+    parser.add_argument("--release-id")
     parser.add_argument("--package", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
@@ -160,52 +245,26 @@ def main(argv=None):
     args = parser.parse_args(argv)
     private_key = os.environ.pop("OKOU_UPDATE_SIGNING_KEY", "")
     try:
-        if args.next_version:
-            print(next_version())
-            return 0
         if args.tag is None or args.package is None or args.output_dir is None:
             parser.error("--tag, --package, and --output-dir are required")
-        create_tag = False
+        release = None
         if not args.prepare_only:
-            if args.commit != git_output("rev-parse", "HEAD") or args.tag != "v" + next_version():
-                raise ValueError("Release commit or version does not match the tested main checkout")
-            target = tuple(map(int, args.tag[1:].split(".")))
-            for tag in git_output("tag", "--list", "v*").splitlines():
-                candidate = re.fullmatch("v" + SEMVER, tag)
-                if candidate and tuple(map(int, candidate.groups())) > target:
-                    raise ValueError("A newer stable version already has a tag")
-            tag_ref = "refs/tags/" + args.tag
-            tags = git_output("tag", "--list", args.tag)
-            if tags:
-                if git_output("rev-parse", f"{tag_ref}^{{commit}}") != args.commit:
-                    raise ValueError("Release tag already belongs to another commit")
-                if release_exists(args.tag):
-                    print(f"Release {args.tag} already exists for the tested commit")
-                    return 0
-            else:
-                create_tag = True
-        version, assets = prepare(
+            if not args.commit or not args.release_id:
+                parser.error("--commit and --release-id are required when publishing")
+            validate_repo_version(args.tag)
+            if args.commit != git_output("rev-parse", "HEAD"):
+                raise ValueError("Release commit does not match the tested main checkout")
+            release = fetch_release(args.release_id)
+            state = inspect_release(release, args.tag, args.commit)
+            if state == "published":
+                print(f"Release {args.tag} is already published for the tested commit")
+                return 0
+        _, assets = prepare(
             args.tag, args.package.absolute(), args.output_dir.absolute(), private_key
         )
         private_key = ""
         if not args.prepare_only:
-            # Create the ref atomically after signature verification. A
-            # conflicting ref aborts without publishing or moving any tag.
-            if create_tag:
-                run([
-                    "gh", "api", "--method", "POST", f"repos/{REPOSITORY}/git/refs",
-                    "-f", f"ref={tag_ref}", "-f", f"sha={args.commit}",
-                ], stdout=subprocess.DEVNULL)
-            run([
-                "gh", "release", "create", args.tag, "--repo", REPOSITORY,
-                "--verify-tag", "--latest=false", "--title", f"Okou {version}",
-                "--notes", (
-                    f"Okou {version} for the Cardputer Zero AppStore (arm64).\n\n"
-                    "Install the okou package through the AppStore or with apt. "
-                    "The signed manifest and SHA-256 checksums identify this build."
-                ),
-                *map(str, assets),
-            ])
+            upload_and_publish(args.release_id, release, assets)
         return 0
     except (ValueError, OSError) as error:
         print(f"Release refused: {error}", file=sys.stderr)
