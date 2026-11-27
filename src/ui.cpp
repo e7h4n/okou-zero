@@ -305,6 +305,12 @@ Action UI::handle(const Input &input) {
     if (page == Page::chat) {
         if (input.key == Key::enter && !input.shift && !input.ctrl && !thread_id.empty()) {
             if (recording) {
+                if (recording_too_short()) {
+                    recording = false;
+                    voice_working = busy = true;
+                    status = "Recording too short";
+                    return Action::skip_short_recording;
+                }
                 send_started_ = lv_tick_get();
                 recording = false;
                 voice_pending = voice_working = busy = true;
@@ -378,6 +384,10 @@ bool UI::update_safe() const {
     return !busy && !recording && !voice_pending && !voice_working && !submitting && !uncertain &&
            client_id_input.empty();
 }
+bool UI::recording_too_short(std::chrono::steady_clock::time_point now) const {
+    return recording_started == std::chrono::steady_clock::time_point{} ||
+           now - recording_started < min_voice_duration;
+}
 void UI::update_recording_clock() {
     if (!recording_clock_)
         return;
@@ -426,7 +436,7 @@ void UI::render_voice() {
         update_recording_clock();
     } else {
         sending_wave_ = recording_waveform.overview();
-        const auto seconds = static_cast<unsigned>(sending_wave_.samples / 16000);
+        const auto seconds = static_cast<unsigned>(sending_wave_.samples / voice_sample_rate);
         char duration[24];
         std::snprintf(duration, sizeof(duration), "%02u:%02u", seconds / 60, seconds % 60);
         type(panel, duration, 12, 64, 143, ink, markdown_fonts_.bold, 22);

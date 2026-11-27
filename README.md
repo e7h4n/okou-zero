@@ -60,7 +60,7 @@ See [release and update details](docs/updates.md).
 | Page Up / Page Down | Scroll the current reply three lines |
 | Space on the welcome screen | Send Okou on a short orbit |
 | Enter in settings | Open the selected action |
-| Enter in chat | Tap to record. Tap again to send. |
+| Enter in chat | Tap to record. Tap again to send (recordings under 1s are skipped). |
 | Volume up / down, Mute | Adjust system output by 10%, or toggle mute. The screen briefly shows the resulting level. |
 | Ctrl+R | Retry a retained recording or failed voice message |
 | Esc while recording/recovering | Discard recording and retained voice work |

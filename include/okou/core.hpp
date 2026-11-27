@@ -131,6 +131,14 @@ class Realtime {
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
+inline constexpr std::uint32_t voice_sample_rate = 16000U;
+inline constexpr std::chrono::seconds min_voice_duration{1};
+inline constexpr std::size_t min_voice_samples =
+    static_cast<std::size_t>(voice_sample_rate) *
+    static_cast<std::size_t>(min_voice_duration.count());
+constexpr bool voice_recording_too_short(std::size_t samples) noexcept {
+    return samples < min_voice_samples;
+}
 std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm);
 class RecordingWaveform;
 class AudioCapture {

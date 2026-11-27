@@ -10,7 +10,7 @@
 
 namespace okou {
 namespace {
-constexpr std::size_t max_samples = 16000U * 60U * 10U;
+constexpr std::size_t max_samples = static_cast<std::size_t>(voice_sample_rate) * 60U * 10U;
 void le16(std::vector<std::uint8_t> &out, std::uint16_t n) {
     out.push_back(static_cast<std::uint8_t>(n));
     out.push_back(static_cast<std::uint8_t>(n >> 8));
@@ -47,8 +47,8 @@ std::vector<std::uint8_t> wav(const std::vector<std::int16_t> &pcm) {
     le32(out, 16);
     le16(out, 1);
     le16(out, 1);
-    le32(out, 16000);
-    le32(out, 32000);
+    le32(out, voice_sample_rate);
+    le32(out, voice_sample_rate * 2U);
     le16(out, 2);
     le16(out, 16);
     literal(out, "data");
@@ -143,7 +143,7 @@ void AudioCapture::start(RecordingWaveform &waveform) {
             snd_pcm_hw_params_set_access(impl_->handle, raw, SND_PCM_ACCESS_RW_INTERLEAVED));
         require_alsa(snd_pcm_hw_params_set_format(impl_->handle, raw, SND_PCM_FORMAT_S16_LE));
         require_alsa(snd_pcm_hw_params_set_channels(impl_->handle, raw, 1));
-        require_alsa(snd_pcm_hw_params_set_rate(impl_->handle, raw, 16000, 0));
+        require_alsa(snd_pcm_hw_params_set_rate(impl_->handle, raw, voice_sample_rate, 0));
         snd_pcm_uframes_t period = 512, buffer = 4096;
         int direction = 0;
         require_alsa(
