@@ -12,8 +12,11 @@ creates a draft GitHub Release, validates and signs the tested `.deb` with
 publishes the release as the GitHub `Latest` release.
 
 When the `CARDPUTER_PACKAGES_TOKEN` repository secret (`@e7h4n` Classic PAT with
-`public_repo` scope) is configured, the workflow then updates `e7h4n/packages`
-and opens a `CardputerZero/packages` store update PR pointing directly to the
+`public_repo` and `workflow` scopes) is configured, the workflow first syncs
+`e7h4n/packages:main` with `CardputerZero/packages:main` via GitHub's
+`merge-upstream` API (requiring the `workflow` scope whenever upstream modifies
+`.github/workflows/`), then pushes a release branch to `e7h4n/packages` and
+opens a `CardputerZero/packages` store update PR pointing directly to the
 published GitHub Release `.deb` asset with the release changelog in the PR body.
 Installing the store package switches the device to AppStore-managed updates.
 

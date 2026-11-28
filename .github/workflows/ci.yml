@@ -218,7 +218,7 @@ jobs:
               {
                 echo "### CardputerZero Store PR Skipped"
                 echo ""
-                echo "Configure the \`CARDPUTER_PACKAGES_TOKEN\` repository secret (\`@e7h4n\` Classic PAT with \`public_repo\` scope) to enable automatic store update PRs."
+                echo "Configure the \`CARDPUTER_PACKAGES_TOKEN\` repository secret (\`@e7h4n\` Classic PAT with \`public_repo\` and \`workflow\` scopes) to enable automatic store update PRs."
               } >> "$GITHUB_STEP_SUMMARY"
             fi
           else
@@ -242,6 +242,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y python3 dpkg-dev
+      - name: Sync packages fork with upstream
+        if: steps.token.outputs.enabled == 'true'
+        env:
+          CARDPUTER_PACKAGES_TOKEN: ${{ secrets.CARDPUTER_PACKAGES_TOKEN }}
+        shell: bash
+        run: python3 scripts/publish_store.py --sync-fork-only
       - name: Open CardputerZero/packages update PR
         if: steps.token.outputs.enabled == 'true'
         env:
@@ -258,4 +264,5 @@ jobs:
           python3 scripts/publish_store.py \
             --tag "$RELEASE_TAG" \
             --release-id "$RELEASE_ID" \
-            --package "${packages[0]}"
+            --package "${packages[0]}" \
+            --skip-fork-sync
